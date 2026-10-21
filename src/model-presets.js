@@ -50,12 +50,15 @@ export const REVIEWER_PRESETS = Object.freeze([
   },
   {
     id: 'openrouter-free', label: 'OpenRouter · free router (slow, best effort)',
-    description: 'Explicit opt-in to openrouter/free. Requires a key. Model selection varies by request, and tool-call failures or rate limits can interrupt checks. Sphinx does not switch to a paid route automatically.',
+    description: 'Explicit opt-in to openrouter/free. Requires a key. Model selection varies by request, and tool-call failures or rate limits can interrupt checks. Uses the 16,384-token output ceiling because free models can spend most of it on reasoning. Sphinx does not switch to a paid route automatically.',
     models: {
       small: { provider: 'openrouter', model: 'openrouter/free' },
       medium: { provider: 'openrouter', model: 'openrouter/free' },
       large: { provider: 'openrouter', model: 'openrouter/free' },
     },
+    // Free router models count hidden reasoning against this budget; at 4,096
+    // they can exhaust it before writing any questions (CRI-58).
+    maxOutputTokens: 16384,
     allowPaid: false,
     sources: ['https://openrouter.ai/docs/guides/routing/routers/free-router'],
   },
