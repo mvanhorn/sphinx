@@ -4,7 +4,7 @@ const plainObject = value => value !== null && typeof value === 'object'
 // Normalize representation only. Keep unknown fields and duplicate metadata so
 // the ordinary strict schema still rejects them; never repair malformed JSON or
 // modify a question, answer key, citation, or evidence identifier.
-export function normalizeFinishArguments(value) {
+export function normalizeFinishArguments(value, { reasonField = false } = {}) {
   if (!plainObject(value)) return value;
   let assessment = value.assessment;
   if (typeof assessment === 'string') {
@@ -18,5 +18,8 @@ export function normalizeFinishArguments(value) {
       delete normalized.assessment[key];
     }
   }
+  // Small-change schemas carry noQuestionReason; when questions are asked it is
+  // simply empty, so a model that omits it is not sent around a repair loop.
+  if (reasonField && Array.isArray(normalized.assessment.questions) && normalized.assessment.questions.length && !Object.hasOwn(normalized.assessment, 'noQuestionReason')) normalized.assessment.noQuestionReason = '';
   return normalized;
 }

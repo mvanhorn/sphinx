@@ -262,6 +262,7 @@ test('Skip this time lets the same push continue without a receipt', { timeout: 
   const result = await child.finished;
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stderr, /skipped for this push/);
+  assert.doesNotMatch(result.stderr, /understanding check complete/, 'A skip is not reported as a completed check');
   assert.equal(await f.bare('rev-parse', 'refs/heads/main'), f.baseHead);
 });
 

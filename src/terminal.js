@@ -38,19 +38,21 @@ export function wrapText(value, width = 80, indent = '') {
   }).join('\n');
 }
 
-// A human face and striped nemes above the lion's body and outstretched paws.
+// The Sphinx mark in half-blocks, matching the SVG logo: crowned nemes with a
+// forehead band, striped lappets, eyes, mouth, and the false beard.
 export const SPHINX = [
-  '        .-====-.',
-  '       /  .--.  \\',
-  '      /  /    \\  \\',
-  '      |  |o  o|  |',
-  '      |  | __ |  |',
-  "     /|  '----'  |\\",
-  '    /_|__/|  |\\__|_\\',
-  '   /      |__|      \\____',
-  "  /   ___/____\\___       `-.",
-  ' /___/            \\________\\',
-  ' \\___\\____________/___/____/',
+  '      ▄██████████▄',
+  '    ▄██████████████▄',
+  '    ████████████████',
+  '   ███▄▄▄▄▄▄▄▄▄▄▄▄███',
+  '  ▀▀▀▀▀██      ██▀▀▀▀▀',
+  '   ▀▀▀▀██ ▀  ▀ ██▀▀▀▀',
+  '   ▀▀▀▀██      ██▀▀▀▀',
+  '   ▀▀▀▀██  ▀▀  ██▀▀▀▀',
+  '   ▀▀▀▀██▄    ▄██▀▀▀▀',
+  '   ▀▀▀▀███ ▄▄ ███▀▀▀▀',
+  '   ▀▀▀▀███ ██ ███▀▀▀▀',
+  '   ██████████████████',
 ];
 
 export function createTerminal({ stream = process.stdout, env = process.env, width } = {}) {
@@ -76,20 +78,34 @@ export function createTerminal({ stream = process.stdout, env = process.env, wid
       for (const line of lines.slice(1)) write(' '.repeat(maxLabel + 5) + line);
     }
   };
+  // Columns align when they fit; narrow terminals get wrapped label/value rows.
+  const table = (head, body) => {
+    const widths = head.map((_, column) => Math.max(...[head, ...body].map(row => stripAnsi(row[column]).length)));
+    if (2 + widths.reduce((sum, width) => sum + width + 3, -3) > size) {
+      rows(body.map(([label, ...cells]) => [label, cells.map((cell, index) => `${head[index + 1]} ${cell}`).join(' · ')]));
+      return;
+    }
+    const pad = (cell, column) => {
+      const room = ' '.repeat(widths[column] - stripAnsi(cell).length);
+      return column === 0 ? cell + room : room + cell;
+    };
+    write(style.muted(`  ${head.map(pad).join('   ')}`));
+    for (const [label, ...cells] of body) write(`  ${[style.strong(pad(label, 0)), ...cells.map((cell, index) => pad(cell, index + 1))].join('   ')}`);
+  };
   const banner = () => {
     write('');
     if (size >= 65) {
-      const side = { 2: style.strong('sphinx'), 4: 'Outsource your thinking,', 5: 'not your understanding.' };
-      SPHINX.forEach((line, index) => write(style.amber(line.padEnd(32)) + (side[index] || '')));
+      const side = { 4: style.strong('sphinx'), 6: 'You can outsource your thinking,', 7: 'but not your understanding.' };
+      SPHINX.forEach((line, index) => write(style.amber(line.padEnd(28)) + (side[index] || '')));
     } else {
       if (size >= 30) SPHINX.forEach(line => write(style.amber(line)));
       paragraph(style.strong('sphinx'));
-      paragraph('Outsource your thinking, not your understanding.');
+      paragraph('You can outsource your thinking, but not your understanding.');
     }
     write('');
   };
   return {
-    width: size, style, line: paragraph, paragraph, section, rows, banner,
+    width: size, style, line: paragraph, paragraph, section, rows, table, banner,
     blank: () => write(''),
     success: text => paragraph(`${style.green('✓')} ${text}`),
     warning: text => paragraph(`${style.amber('!')} ${text}`),

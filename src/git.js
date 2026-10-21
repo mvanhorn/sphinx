@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { promisify } from 'node:util';
+import path from 'node:path';
 import { policyHash } from './config.js';
 import { loadIgnorePolicy } from './ignore.js';
 import { loadProjectContext } from './repo-context.js';
@@ -11,14 +12,17 @@ const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const ZERO = /^0+$/;
 const hash = value => createHash('sha256').update(value).digest('hex');
 
-async function git(cwd, args, { allowFailure = false, maxBuffer = 4 * 1024 * 1024, timeout = 30000 } = {}) {
+async function git(cwd, args, { allowFailure = false, maxBuffer = 4 * 1024 * 1024, timeout = 30000, input } = {}) {
   try {
-    const { stdout } = await exec('git', [
+    const running = exec('git', [
       '--no-pager', '--literal-pathspecs', '-c', 'core.fsmonitor=false', ...args,
     ], {
       cwd, encoding: 'utf8', maxBuffer, timeout,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' },
     });
+    running.child.stdin.on('error', () => {});
+    running.child.stdin.end(input);
+    const { stdout } = await running;
     return stdout;
   } catch (error) {
     if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
@@ -50,6 +54,13 @@ function triggered(config, event, branch, remote) {
   return config.enabled !== false && config.events.includes(event)
     && config.branches.some(pattern => matches(pattern, branch))
     && (!remote || config.remotes.some(pattern => matches(pattern, remote)));
+}
+
+/** The repository's own name: the same in every worktree, unlike the checkout folder. */
+export async function repositoryName(cwd = process.cwd()) {
+  const { root, commonDir } = await repository(cwd);
+  const name = path.basename(commonDir) === '.git' ? path.basename(path.dirname(commonDir)) : path.basename(commonDir).replace(/\.git$/, '');
+  return name || path.basename(root);
 }
 
 export async function repository(cwd = process.cwd()) {
@@ -191,6 +202,34 @@ export async function revalidateSnapshot(snapshot, config, { env = process.env }
   return true;
 }
 
+// A new branch is checked from where it left the nearest branch already on the
+// remote, the same range a pull request shows, instead of from an empty tree.
+// For a branch stacked on another feature branch that is the parent branch, not
+// the default branch. Only branches the policy also checks count; otherwise code
+// that reached them unchecked would be skipped, so the whole tree is assessed.
+async function branchPoint(root, remote, head, config) {
+  if (!remote || remote === '.' || !/^[\w.-]+$/.test(remote)) return null;
+  const prefix = `refs/remotes/${remote}/`;
+  const checked = (await git(root, ['for-each-ref', '--format=%(refname)', prefix], { allowFailure: true }) || '')
+    .split('\n').filter(ref => ref && ref !== `${prefix}HEAD` && triggered(config, 'pre-push', ref.slice(prefix.length), remote));
+  if (!checked.length) return null;
+  // One walk, however many branches the remote has: the commits only on this
+  // branch, and the already-pushed commits they start from (marked "-").
+  const walk = await git(root, ['rev-list', '--boundary', head, '--stdin'], { input: `${checked.map(ref => `^${ref}`).join('\n')}\n`, allowFailure: true });
+  if (walk === null) return null;
+  if (!walk.trim()) return head; // Already on a checked branch: nothing new to check.
+  const starts = walk.split('\n').filter(line => line.startsWith('-')).map(line => line.slice(1)).filter(oid => OID.test(oid));
+  if (starts.length <= 1) return starts[0] ?? null; // No shared history: check the whole tree.
+  // A branch that merged others starts from several places; any one of them only
+  // adds already-checked commits to the range, so take the nearest.
+  let nearest = null;
+  for (const base of starts) {
+    const distance = Number((await git(root, ['rev-list', '--count', `${base}..${head}`])).trim());
+    if (!nearest || distance < nearest.distance) nearest = { base, distance };
+  }
+  return nearest.base;
+}
+
 export async function pushSnapshots({ cwd = process.cwd(), remote, remoteUrl, input, config, env = process.env }) {
   if (!config.enabled || !config.events.includes('pre-push')) return [];
   const repo = await repository(cwd);
@@ -203,7 +242,7 @@ export async function pushSnapshots({ cwd = process.cwd(), remote, remoteUrl, in
     if (ZERO.test(head) || head === old || !ref.startsWith('refs/heads/')) continue;
     if (!triggered(config, 'pre-push', ref.slice('refs/heads/'.length), remote)) continue;
     await ensureCommit(repo.root, head, remote);
-    const base = ZERO.test(old) ? null : old;
+    const base = ZERO.test(old) ? await branchPoint(repo.root, remote, head, config) : old;
     if (base) await ensureCommit(repo.root, base, remote, true);
     const tree = (await git(repo.root, ['rev-parse', `${head}^{tree}`])).trim();
     const snapshot = await buildSnapshot({ repo, event: 'pre-push', target: { remote, url: remoteUrl || '', ref }, base, head, tree, sourceRef, config, env });

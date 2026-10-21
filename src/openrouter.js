@@ -3,7 +3,7 @@ import { reportUsage } from './usage.js';
 import { textStream, readCompletionStream } from './stream.js';
 import { MAX_REVIEWER_TOOL_CALLS } from './reviewer-limits.js';
 
-const incomplete = 'No completion was recorded; Sphinx did not retry or switch models.';
+const incomplete = 'No completion was recorded; Sphinx did not retry automatically.';
 const MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60;
 const RETRYABLE_ERROR_TYPES = new Set(['rate_limit_exceeded', 'provider_overloaded', 'provider_unavailable', 'server', 'timeout']);
 // The transport itself never retries. Pi may return this sanitized feedback to
@@ -14,7 +14,7 @@ const failureAdvice = {
   401: 'API key was rejected. Run sphinx auth.',
   402: 'OpenRouter account has insufficient credits.',
   404: 'No compatible provider was available for this request. Select a route supporting JSON schema or retry later.',
-  429: 'Provider or account rate limit reached. Wait before retrying; Sphinx will not switch models.',
+  429: 'Provider or account rate limit reached. Wait before retrying, or switch this check to your Claude Code or Codex plan when offered.',
   503: 'Selected model is unavailable. Retry later or explicitly select another route.',
 };
 
@@ -226,7 +226,7 @@ async function requestOpenRouter({messages, schema, tools, toolChoice, config, e
   if (!data || typeof data!=='object' || Array.isArray(data)) throw new Error(`${name} returned an invalid response object.`);
   requestSignal.throwIfAborted();
   // Billed even when the choice is later rejected, so record it first.
-  reportUsage({ inputTokens: data.usage?.prompt_tokens, outputTokens: data.usage?.completion_tokens, cost: data.usage?.cost });
+  reportUsage({ inputTokens: data.usage?.prompt_tokens, outputTokens: data.usage?.completion_tokens, cost: data.usage?.cost, provider: openai ? 'openai' : 'openrouter', model });
   return requireFinishedChoice(data, config, Boolean(tools), response.headers);
 }
 

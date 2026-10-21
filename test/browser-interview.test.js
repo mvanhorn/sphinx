@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createBrowserInterview, openQuestionnaireBrowser } from '../src/browser-interview.js';
+import { createBrowserInterview, notifyDesktop, openQuestionnaireBrowser } from '../src/browser-interview.js';
 import { createSessionStore } from '../src/sessions.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
 import { claimCheckpointDialog, checkpointTerminalStatus } from '../src/terminal-launch.js';
@@ -15,11 +15,11 @@ import { recentOverrides } from '../src/overrides.js';
 import { textStream } from '../src/stream.js';
 
 const q = { id: 'duplicate', concept: 'idempotency', prompt: 'Can a retry duplicate the insert? <script>PRIVATE_SCRIPT</script>', choices: ['Yes', 'No'], expectedAnswer: 'PRIVATE_KEY', rationale: 'PRIVATE_RUBRIC', evidence: [{ path: 'app.js', reason: 'The insert is unconditional.' }] };
-async function fixture(t, { generate, grade, maxModelCalls = 20, validate = async () => {} } = {}) {
+async function fixture(t, { generate, grade, maxModelCalls = 20, validate = async () => {}, plans = [], interviewOptions = {}, snapshotOverrides = {} } = {}) {
   const home = await mkdtemp(path.join(tmpdir(), 'sphinx-browser-'));
   const env = { SPHINX_HOME: path.join(home, 'state'), SPHINX_USER_HOME: home }, repoRoot = path.join(home, 'repo'); await mkdir(repoRoot);
   const config = { ...structuredClone(DEFAULT_CONFIG), maxModelCalls };
-  const snapshot = { id: 'a'.repeat(64), repoRoot, event: 'pre-push', target: { ref: 'refs/heads/main' }, files: ['app.js'], stats: { additions: 5, deletions: 1, files: 1 } };
+  const snapshot = { id: 'a'.repeat(64), repoRoot, event: 'pre-push', target: { ref: 'refs/heads/main' }, files: ['app.js'], stats: { additions: 5, deletions: 1, files: 1 }, ...snapshotOverrides };
   let generated = 0, graded = 0, opened = 0;
   const store = createSessionStore({ env, validate,
     generate: async (_s, _c, options) => { generated++; if (generate) return generate(generated, options); await options.beforeCall(); return { questions: [q] }; },
@@ -27,7 +27,7 @@ async function fixture(t, { generate, grade, maxModelCalls = 20, validate = asyn
   });
   await store.ensure(snapshot, config);
   const controller = new AbortController(), output = [];
-  const interview = createBrowserInterview({ env, signal: controller.signal, store, readConfig: async () => config, revalidate: async () => { await validate(); return true; }, openBrowser: async () => { opened++; return true; }, output: text => output.push(text) });
+  const interview = createBrowserInterview({ notify: () => false, env, signal: controller.signal, store, readConfig: async () => config, revalidate: async () => { await validate(); return true; }, openBrowser: async () => { opened++; return true; }, output: text => output.push(text), findPlans: async () => plans, checkUpdate: async () => null, ...interviewOptions });
   const request = { id: snapshot.id, token: randomUUID(), repoRoot, delivery: 'hook', createdAt: Date.now() };
   const tasks = [];
   const present = (next = request) => { const task = interview.present({ request: next }); tasks.push(task); return task; };
@@ -145,7 +145,8 @@ test('Pause after a receipt was committed stops the interview without revoking o
   await f.post('answer', { response: 'Yes, the insert is repeated.' }); await committed;
   assert.equal(await f.store.approved(f.snapshot, f.config), true);
   const paused = await (await f.post('pause')).json();
-  assert.match(paused.message, /Progress is saved; the waiting Git operation was stopped/);
+  assert.match(paused.message, /progress is saved, and the waiting push was stopped\. To continue, run the same push again/);
+  assert.equal(paused.resume, 'git push', 'says how to continue');
   assert.equal((await done).status, 'pending');
   assert.doesNotMatch(f.interview.state.message, /No approval/);
   assert.equal(await f.store.approved(f.snapshot, f.config), true, 'An already committed receipt must remain saved');
@@ -229,7 +230,7 @@ test('a check Git discarded as stale tells the page why instead of reporting a p
 
 test('CI and evaluator subprocesses never start a browser or model', async () => {
   for (const env of [{ CI: '1' }, { SPHINX_EVALUATOR: '1' }]) {
-    const interview = createBrowserInterview({ env, openBrowser: () => assert.fail('must not open'), reserve: () => assert.fail('must not reserve') });
+    const interview = createBrowserInterview({ notify: () => false, env, openBrowser: () => assert.fail('must not open'), reserve: () => assert.fail('must not reserve') });
     assert.equal((await interview.present({ request: { id: 'a'.repeat(64) } })).status, 'unavailable'); await interview.close();
   }
 });
@@ -260,6 +261,7 @@ test('Skip this time lets Git continue during review, logs the reason, and never
   assert.equal(response.status, 200, 'Skip does not need the latest revision while progress streams');
   assert.equal((await done).status, 'skipped');
   assert.equal(f.interview.state.phase, 'skipped');
+  assert.match(f.interview.state.message, /you can close this tab/);
   assert.equal(await f.store.approved(f.snapshot, f.config), false);
   const [entry] = await recentOverrides({ env: f.env });
   assert.equal(entry.kind, 'skip'); assert.equal(entry.reason, 'prod is down'); assert.equal(entry.id, f.snapshot.id);
@@ -282,7 +284,7 @@ test('grader feedback streams into the page while grading, then the saved feedba
   release();
   assert.equal((await done).status, 'passed');
   const feedback = f.interview.state.messages.filter(item => item.kind === 'feedback');
-  assert.deepEqual(feedback.map(item => [item.text, Boolean(item.streaming)]), [['There is no durable deduplication.', false]]);
+  assert.deepEqual(feedback.map(item => [item.text, Boolean(item.streaming)]), [['There is no durable deduplication.', false]], 'Feedback the grader wrote is shown, even on a correct answer');
 });
 
 test('the page serves the frozen change and verified question evidence without disturbing an answer in flight', async t => {
@@ -313,7 +315,7 @@ test('the page serves the frozen change and verified question evidence without d
     grade: async request => { await request.beforeCall(); return { verdict: 'correct', feedback: 'Correct.', followUp: null }; } });
   await store.ensure(snapshot, config);
   const controller = new AbortController();
-  const interview = createBrowserInterview({ env, signal: controller.signal, store, readConfig: async () => config, revalidate: async () => true, openBrowser: async () => false, output: () => {} });
+  const interview = createBrowserInterview({ notify: () => false, env, signal: controller.signal, store, readConfig: async () => config, revalidate: async () => true, openBrowser: async () => false, output: () => {} });
   const done = interview.present({ request: { id: snapshot.id, token: randomUUID(), repoRoot: snapshot.repoRoot, delivery: 'hook', createdAt: Date.now() } });
   t.after(async () => { controller.abort(); await done.catch(() => {}); await interview.close(); });
   let first;
@@ -339,5 +341,188 @@ test('the page serves the frozen change and verified question evidence without d
     body: JSON.stringify({ id: first.id, revision: first.revision, action: 'answer', questionId: q.id, response: 'It returns false for a repeated id.' }) });
   assert.equal(answered.status, 202);
   assert.equal((await done).status, 'passed');
+  assert.match(interview.state.message, /You passed\. You can close this tab/);
   assert.match(interview.state.message, /not a review of every changed line/);
+});
+
+test('a rate limit while grading offers the coding-agent plan, then the same question is answered on it', async t => {
+  const providers = [];
+  const f = await fixture(t, { plans: ['claude'], grade: async (request, count) => {
+    providers.push(request.config.provider);
+    if (count === 1) throw Object.assign(new Error('OpenRouter HTTP 429 (code: 429; error_type: rate_limit_exceeded).'), { code: 'OPENROUTER_PROVIDER_ERROR', status: 429, errorType: 'rate_limit_exceeded' });
+    return { verdict: 'correct', feedback: 'Correct.', followUp: null };
+  } });
+  const done = f.present(); await f.waitFor('question');
+  await f.post('answer', { response: 'Yes, it inserts again.' });
+  const recovery = await f.waitFor('recovery');
+  assert.deepEqual(recovery.choices.map(choice => choice.value), ['switch-claude', 'back']);
+  await f.post('switch-claude');
+  await f.waitFor('question');
+  assert.match(f.interview.state.messages.at(-1).text, /Switched this check to Claude Code\. Send your answer again\./);
+  await f.post('answer', { response: 'Yes, it inserts again.' });
+  assert.equal((await done).status, 'passed');
+  assert.deepEqual(providers, ['openrouter', 'claude']);
+});
+
+test('a newer release is offered in the header and installs only after the check ends', async t => {
+  const started = [];
+  const f = await fixture(t, { interviewOptions: {
+    checkUpdate: async () => ({ current: '0.1.7', latest: '0.1.9', available: true, command: 'npm install -g sphinx-understand@latest', note: null }),
+    planUpdate: async () => ({ manager: 'npm', command: ['npm', 'install', '-g', 'sphinx-understand@latest'] }),
+    startUpdate: async options => { started.push(options); return true; },
+  } });
+  f.present(); await f.waitFor('question');
+  for (let i = 0; i < 100 && !f.interview.state.update; i++) await delay(10);
+  assert.equal(f.interview.state.update.latest, '0.1.9');
+  const html = await (await fetch(f.interview.url)).text();
+  assert.match(html, /id="version">v\d+\.\d+\.\d+</);
+  const forged = await fetch(`${f.interview.url}/action?update=1`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.invalid' }, body: '{}' });
+  assert.equal(forged.status, 403); assert.equal(started.length, 0);
+  const token = new URL(f.interview.url).pathname.slice(1);
+  const res = await fetch(`${f.interview.url}/action?update=1`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(f.interview.url).origin, 'X-Sphinx-Token': token }, body: '{}' });
+  assert.equal(res.status, 200); assert.equal((await res.json()).update.status, 'scheduled');
+  assert.deepEqual(started[0].command, ['npm', 'install', '-g', 'sphinx-understand@latest']);
+  assert.equal(f.interview.state.phase, 'question', 'updating never interrupts the check');
+  const again = await fetch(`${f.interview.url}/action?update=1`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(f.interview.url).origin, 'X-Sphinx-Token': token }, body: '{}' });
+  assert.equal(again.status, 409); assert.equal(started.length, 1);
+});
+
+test('after a wrong answer streams its feedback, the page shows what Sphinx is doing next', async t => {
+  const transfer = { ...q, id: 'transfer', prompt: 'A different retry scenario: what happens now?' };
+  let release;
+  const f = await fixture(t, { grade: async request => {
+    const raw = '{"questionValid":true,"verdict":"incorrect","feedback":"The insert runs again on retry."';
+    textStream()?.(raw);
+    await Promise.race([new Promise(resolve => { release = resolve; }), delay(3000)]);
+    return { verdict: 'incorrect', feedback: 'The insert runs again on retry.', followUp: transfer };
+  } });
+  f.present(); const state = await f.waitFor('question');
+  await f.post('answer', { questionId: state.question.id, response: 'It is skipped.' });
+  for (let i = 0; i < 200 && !release; i++) await delay(10);
+  for (let i = 0; i < 200 && f.interview.state.messages.at(-1)?.kind !== 'activity'; i++) await delay(10);
+  const messages = f.interview.state.messages;
+  assert.equal(messages.at(-1).text, 'Writing a new scenario to try…');
+  assert.equal(messages.at(-2).kind, 'feedback'); assert.equal(messages.at(-2).streaming, false, 'no frozen cursor');
+  release?.();
+  const next = await f.waitFor('question');
+  assert.ok(!next.messages.some(item => item.text === 'Writing a new scenario to try…'), 'the step goes away with the result');
+});
+
+const pickModel = (f, body) => fetch(`${f.interview.url}/action?model=1`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(f.interview.url).origin, 'X-Sphinx-Token': new URL(f.interview.url).pathname.slice(1) }, body: JSON.stringify(body) });
+
+test('picking a model during the questions grades with it from then on, and can become the default after the check', async t => {
+  const f = await fixture(t, { plans: ['claude'] });
+  const done = f.present(); await f.waitFor('question');
+  assert.deepEqual(f.interview.state.models.groups.map(group => group.provider), ['claude']);
+  assert.equal((await pickModel(f, { provider: 'claude', model: 'opus' })).status, 400, 'only listed models');
+  const res = await pickModel(f, { provider: 'claude', model: 'sonnet', saveDefault: true });
+  assert.equal(res.status, 200);
+  assert.deepEqual([f.interview.state.route.provider, f.interview.state.route.model], ['claude', 'sonnet']);
+  assert.match(f.interview.state.messages.at(-1).text, /Switched this check to Claude Code sonnet\. It becomes your default when this check ends\./);
+  const { readFile } = await import('node:fs/promises');
+  const before = await readFile(path.join(f.env.SPHINX_HOME, 'config.json'), 'utf8').catch(() => '');
+  assert.doesNotMatch(before, /sonnet/, 'not saved mid-check, which would invalidate it');
+  const state = f.interview.state;
+  await f.post('answer', { questionId: state.question.id, response: 'Yes, because the insert is unconditional.' });
+  assert.equal((await done).status, 'passed');
+  // Git re-checks the policy after the questionnaire returns; saving must wait for close().
+  assert.doesNotMatch(await readFile(path.join(f.env.SPHINX_HOME, 'config.json'), 'utf8').catch(() => ''), /sonnet/);
+  await f.interview.close();
+  const saved = JSON.parse(await readFile(path.join(f.env.SPHINX_HOME, 'config.json'), 'utf8'));
+  assert.deepEqual(saved.models.large, { provider: 'claude', model: 'sonnet' });
+});
+
+test('picking a model mid-review stops that run and restarts the review on the new model', async t => {
+  const f = await fixture(t, { plans: ['claude'], generate: async (n, options) => {
+    await options.beforeCall();
+    if (n === 1) await new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }));
+    return { questions: [q] };
+  } });
+  f.present();
+  for (let i = 0; i < 300 && !f.interview.state.models?.reviewing; i++) await delay(10);
+  assert.equal(f.interview.state.models.reviewing, true);
+  const res = await pickModel(f, { provider: 'claude', model: 'haiku' });
+  assert.deepEqual(await res.json(), { ok: true, restarting: true });
+  // The restarted review can take a while when the whole suite is running.
+  for (let i = 0; i < 1500 && f.interview.state.phase !== 'question'; i++) await delay(10);
+  const state = await f.waitFor('question');
+  assert.equal(f.generated(), 2);
+  assert.deepEqual([state.route.provider, state.route.model], ['claude', 'haiku']);
+  assert.ok(state.messages.some(item => /Restarting the review on the new model/.test(item.text)));
+});
+
+test('the page shows the question distance and saves a repository change only when the check ends', async t => {
+  const f = await fixture(t);
+  const done = f.present(); const state = await f.waitFor('question');
+  assert.deepEqual(state.distance, { current: 'mixed', next: null, scope: 'machine' });
+  const pick = distance => fetch(`${f.interview.url}/action?distance=1`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(f.interview.url).origin, 'X-Sphinx-Token': new URL(f.interview.url).pathname.slice(1) }, body: JSON.stringify({ distance }) });
+  assert.equal((await pick('sideways')).status, 400);
+  assert.equal((await pick('low')).status, 200);
+  assert.equal(f.interview.state.distance.next, 'low');
+  const { readFile } = await import('node:fs/promises');
+  await assert.rejects(readFile(path.join(f.snapshot.repoRoot, '.sphinxconfig'), 'utf8'), { code: 'ENOENT' }, 'not written mid-check: it would invalidate this check');
+  await f.post('answer', { questionId: state.question.id, response: 'Yes, because the insert is unconditional.' });
+  assert.equal((await done).status, 'passed');
+  // Git re-checks the policy after the questionnaire returns; writing must wait for close().
+  await assert.rejects(readFile(path.join(f.snapshot.repoRoot, '.sphinxconfig'), 'utf8'), { code: 'ENOENT' });
+  await f.interview.close();
+  assert.equal(JSON.parse(await readFile(path.join(f.snapshot.repoRoot, '.sphinxconfig'), 'utf8')).distance, 'low');
+});
+
+test('a push that may be a pull request offers posting the stamp there, and the Git hook gets the choice', async t => {
+  const pr = await fixture(t, { snapshotOverrides: { target: { remote: 'origin', url: 'https://github.com/acme/widgets.git', ref: 'refs/heads/feature' } } });
+  pr.present(); await pr.waitFor('question');
+  assert.deepEqual(pr.interview.state.stamp, { post: false, action: false });
+  const toggle = post => fetch(`${pr.interview.url}/action?stamp=1`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(pr.interview.url).origin, 'X-Sphinx-Token': new URL(pr.interview.url).pathname.slice(1) }, body: JSON.stringify({ post }) });
+  assert.equal((await toggle('yes')).status, 409);
+  assert.equal((await toggle(true)).status, 200);
+  assert.equal(pr.interview.stampChoice(pr.snapshot.id), true);
+  const main = await fixture(t);
+  main.present(); await main.waitFor('question');
+  assert.equal(main.interview.state.stamp, undefined, 'a push to main is not a pull request');
+});
+
+test('a paused push shows the exact command that resumes it', async t => {
+  const f = await fixture(t, { snapshotOverrides: { sourceRef: 'refs/heads/master', target: { remote: 'origin', url: '/tmp/r.git', ref: 'refs/heads/master' } } });
+  f.present(); await f.waitFor('question');
+  await f.post('pause');
+  const paused = await f.waitFor('paused');
+  assert.equal(paused.resume, 'git push origin master');
+});
+
+test('questions ready raise one quiet macOS notification, with text passed as arguments', async t => {
+  const sent = [];
+  const f = await fixture(t, { interviewOptions: { notify: message => { sent.push(message); return true; } } });
+  f.present(); const state = await f.waitFor('question');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].title, 'Sphinx needs your answers');
+  assert.match(sent[0].message, /→ main$/);
+  await f.post('answer', { questionId: state.question.id, response: 'Yes, because the insert is unconditional.' });
+  assert.equal(sent.length, 1, 'once per check');
+  let call;
+  const spawnImpl = (...args) => { call = args; return new EventEmitter(); };
+  assert.equal(notifyDesktop({ title: 'T', message: 'repo"; do shell script "x', env: {}, platform: 'darwin', spawnImpl }), true);
+  assert.equal(call[0], '/usr/bin/osascript');
+  assert.deepEqual(call[1].slice(-2), ['T', 'repo"; do shell script "x'], 'text is data, never script');
+  for (const options of [{ platform: 'linux', env: {} }, { platform: 'darwin', env: { SSH_TTY: '/dev/x' } }, { platform: 'darwin', env: { CI: '1' } }]) assert.equal(notifyDesktop({ title: 'T', message: 'M', ...options, spawnImpl: () => assert.fail('must not notify') }), false);
+});
+
+test('a follow-up whose ID matches a later question still lets that question appear', async t => {
+  const second = { ...q, id: 'q2', prompt: 'Second question: what about a restart?' };
+  const f = await fixture(t, { snapshotOverrides: { stats: { additions: 200, deletions: 40, files: 6 } },
+    generate: async (_n, options) => { await options.beforeCall(); return { questions: [q, second] }; },
+    grade: async (request, n) => n === 1
+      ? { verdict: 'incorrect', feedback: 'Not quite.', followUp: { ...q, id: 'q2', prompt: 'Follow-up for question one: a different retry?' } }
+      : { verdict: 'correct', feedback: '', followUp: null },
+  });
+  f.present();
+  let state = await f.waitFor('question');
+  await f.post('answer', { questionId: state.question.id, response: 'Wrong.' });
+  for (let i = 0; i < 300 && !/Follow-up for question one/.test(f.interview.state.question?.prompt || ''); i++) await delay(10);
+  state = f.interview.state;
+  await f.post('answer', { questionId: state.question.id, response: 'Right.' });
+  for (let i = 0; i < 300 && !/Second question/.test(f.interview.state.question?.prompt || ''); i++) await delay(10);
+  const shown = f.interview.state.messages.filter(item => item.kind === 'question').map(item => item.text);
+  assert.ok(shown.some(text => /Second question/.test(text)), `question 2 must be shown: ${JSON.stringify(shown)}`);
+  assert.notEqual(f.interview.state.messages.filter(item => item.kind === 'question').at(-2).questionId, f.interview.state.question.id, 'the follow-up was renamed apart from question 2');
 });

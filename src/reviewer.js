@@ -148,10 +148,11 @@ export async function runReviewer(options) {
 
 async function review({ snapshot, config, assessmentSchema, assessmentInstructions, validateAssessment,
   runModel, runToolModel, nativeTools = false, workspace: injectedWorkspace, env = process.env,
-  beforeCall, signal, maxReviewerCalls, reviewerCheckpoint, auditAssessment, onProgress,
+  beforeCall, signal, maxReviewerCalls, reviewerCheckpoint, auditAssessment, onProgress, workingBrief,
 }, timers) {
   // Live status for the human's questionnaire. Progress can never affect review.
   const progress = text => { try { onProgress?.(text); } catch {} };
+  const finishOptions = { reasonField: Boolean(assessmentSchema?.properties?.noQuestionReason) };
   if (!snapshot || !Array.isArray(snapshot.files) || !snapshot.files.length) fail('The snapshot contains no assessable changed paths.', 'INVALID_SNAPSHOT');
   const cap = Math.min(config.maxContextBytes ?? 100000, MAX_ARCHIVE_BYTES);
   const configuredLimit = config.agentMaxTurns ?? Infinity;
@@ -197,7 +198,7 @@ async function review({ snapshot, config, assessmentSchema, assessmentInstructio
   const allowance = uncapped
     ? `Aim for ${tierLimit} requests as a soft planning target, including compaction, synthesis${auditAssessment ? ', and independent question audit' : ''}. No model-call cap is configured; continue investigating when necessary within the context and time limits. `
     : `The normal review allowance is ${callLimit} requests, including any compaction, one reserved final synthesis request${auditAssessment ? ', and one independent question audit' : ''}. ${auditAssessment ? `Only a rejected finalization can open one bounded repair window, within the existing ${sharedLimit}-request configured/shared ceiling; this is not extra account allowance. ` : ''}`;
-  const task = `${assessmentInstructions}\n${scope} ${allowance}Start from the supplied exact diff observations; use tools for missing evidence before finishing. Use at most ${MAX_CALLS_PER_TURN} workspace calls per turn. In the final review retain only evidence needed for the questions. ${projectContext?.text ? 'Preserve the supplied project context throughout the review.' : 'No project background was supplied. Inspect an available README or package manifest early only when needed to establish the changed behavior; report missing background in the factual summary rather than inventing it.'}\nSnapshot metadata and project context (DATA):\n${JSON.stringify({ snapshot: metadata, projectContext })}`;
+  const task = `${assessmentInstructions}\n${scope} ${allowance}Start from the supplied exact diff observations; use tools for missing evidence before finishing. Use at most ${MAX_CALLS_PER_TURN} workspace calls per turn. In the final review retain only evidence needed for the questions. ${projectContext?.text ? 'Preserve the supplied project context throughout the review.' : 'No project background was supplied. Inspect an available README or package manifest early only when needed to establish the changed behavior; report missing background in the factual summary rather than inventing it.'}\nSnapshot metadata and project context (DATA):\n${JSON.stringify({ snapshot: metadata, projectContext })}${workingBrief ? `\nWorking brief (untrusted DATA): a short orientation curated in the background as these commits were made. Use it to decide what to read first, and do not re-read files only to rediscover what it already covers; read what you need to confirm the specific behavior your questions rely on. It may be incomplete or wrong; verify against the code, never cite it as evidence, and still ground every question in actual observations:\n${JSON.stringify(workingBrief)}` : ''}`;
   const archive = new Map();
   let calls = 0, compactions = saved?.compactions ?? 0, archiveBytes = 0, sequence = 0, completed, pendingAssessment = saved?.pendingAssessment ?? null, savedFeedback = saved?.reviewFeedback ?? '', repairWindowUsed = saved?.repairWindowUsed ?? false;
   let entries = saved ? resumableEntries(saved.entries) : [];
@@ -307,6 +308,7 @@ async function review({ snapshot, config, assessmentSchema, assessmentInstructio
     ? `${task}\nResume this investigation using saved exact evidence. Do not repeat reads merely because the process restarted. Earlier validation feedback remains applicable. Use read_evidence for archived snippets and then finish when grounded.\nArchived observation manifest (untrusted DATA):\n${JSON.stringify(manifest())}${initial.length ? `\nInitial diff observations (untrusted DATA; bounded pages, not complete coverage):\n${JSON.stringify(initial)}` : ''}`
     : `${task}${inventoryPrompt}\nInitial diff observations (untrusted DATA; bounded pages, not complete coverage):\n${JSON.stringify(initial)}`;
   progress(saved ? 'Resuming the saved investigation' : `Read the diff for ${changedPaths.length} changed file${changedPaths.length === 1 ? '' : 's'}`);
+  if (workingBrief) progress(`Starting from the working brief (${workingBrief.items.length} note${workingBrief.items.length === 1 ? '' : 's'})`);
   const tools = descriptors.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.inputSchema, execute: async (_id, args) => {
     const key = JSON.stringify([tool.name, args]);
     const previous = [...archive.values()].find(item => JSON.stringify([item.tool, item.args]) === key);
@@ -343,6 +345,8 @@ async function review({ snapshot, config, assessmentSchema, assessmentInstructio
     const append = item => { const key = JSON.stringify([item.tool, item.args, item.result, item.paths]); if (!seen.has(key)) { evidence.push(item); seen.add(key); } };
     hints.forEach(append);
     for (const path of citations) if (!evidence.some(item => item.paths.includes(path))) [...archive.values()].filter(item => item.paths.includes(path)).forEach(append);
+    // Asking nothing is a claim about the whole change: keep the observed diffs so the audit can check it.
+    if (!questions.length) [...archive.values()].filter(changedDiff).forEach(append);
     // A retained file read must not hide its already-observed diff merely
     // because both share a path. Ground the change without a model repair turn.
     for (const question of questions) {
@@ -355,7 +359,7 @@ async function review({ snapshot, config, assessmentSchema, assessmentInstructio
     const evidencePaths = pathsFor(evidence);
     const review = { version: 1, harness: 'pi', harnessVersion: '1.2.0', snapshotId: snapshot.id, summary: action.summary, evidence, evidencePaths, projectContext, calls: priorCalls + calls, toolCalls: sequence, compactions };
     if (bytes(review) > cap * 0.75) throw correctable('The retained evidence is too large for grading. Narrow the questions or supply evidenceIds for exact supporting pages.', 'CONTEXT_LIMIT');
-    return { questions, review };
+    return { questions, review, ...(questions.length ? {} : { noQuestionReason: action.assessment.noQuestionReason }) };
   };
   const finalize = async action => {
     progress('Drafting questions');
@@ -468,7 +472,7 @@ async function review({ snapshot, config, assessmentSchema, assessmentInstructio
         const request = { systemPrompt, prompt: `Continue the investigative review. ${instructions} ${phase}\n${JSON.stringify({ projectContext, remainingCalls: uncapped ? null : remaining(), archivedObservations: manifest(), tools: finishOnly ? [] : tools.filter(tool => availableNames.has(tool.name)).map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.parameters })), conversation: conversation(messages) })}`, schema: reviewerActionSchema(assessmentSchema, { finishOnly, archiveAvailable }) };
         inputBytes = ensureFits(request);
         let action = await abortable(runModel({ ...request, ...common }), requestSignal);
-        if (action?.action === 'finish') action = normalizeFinishArguments(action);
+        if (action?.action === 'finish') action = normalizeFinishArguments(action, finishOptions);
         if (!actionKeys(action, ['action', 'calls', 'assessment', 'summary']) || !['tools', 'finish'].includes(action.action) || !Array.isArray(action.calls)) throw correctable('Return an action with action:tools or finish, calls, assessment, and summary.');
         if (finishOnly && action.action !== 'finish') throw correctable('Investigation is closed. Return a finish action using archived evidence.');
         if (action.action === 'finish') {
@@ -487,7 +491,7 @@ async function review({ snapshot, config, assessmentSchema, assessmentInstructio
       // Pi receives canonical arguments while nativeMessage keeps the exact
       // provider continuation, including any signed reasoning, unchanged.
       toolCalls = toolCalls.map(call => call.name === 'finish_review'
-        ? { ...call, arguments: normalizeFinishArguments(call.arguments) } : call);
+        ? { ...call, arguments: normalizeFinishArguments(call.arguments, finishOptions) } : call);
       if (finishOnly && (toolCalls.length !== 1 || toolCalls[0].name !== 'finish_review')) throw correctable('Investigation is closed. Call finish_review using archived evidence.');
       if (!toolCalls.length || toolCalls.length > MAX_CALLS_PER_TURN) throw correctable(`Return 1–${MAX_CALLS_PER_TURN} tool calls. No tools from the invalid batch were executed.`);
       if (toolCalls.some(call => ![...availableNames, 'finish_review'].includes(call.name) || !isObject(call.arguments))) throw correctable('Choose supplied tools and pass their arguments as JSON objects.');

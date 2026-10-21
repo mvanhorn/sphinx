@@ -16,6 +16,8 @@ async function fixture(t) {
   const home = path.join(directory, 'home'), cwd = path.join(directory, 'repo');
   await mkdir(home); await mkdir(cwd);
   const env = { ...process.env, HOME: home, SPHINX_USER_HOME: home, SPHINX_HOME: path.join(home, '.sphinx'), GIT_CONFIG_GLOBAL: path.join(home, '.gitconfig'), GIT_CONFIG_NOSYSTEM: '1' };
+  // Background curation calls OpenRouter when a key exists; tests stay offline.
+  delete env.OPENROUTER_API_KEY;
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_CONFIG_COUNT', 'SPHINX_EVALUATOR', 'SPHINX_PREPARATION_JOB']) delete env[key];
   const git = (...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trimEnd();
   git('init', '-q', '-b', 'main'); git('config', 'user.name', 'Sphinx Test'); git('config', 'user.email', 'test@example.invalid');
@@ -278,4 +280,16 @@ test('workers populate the session cache without approval and foreground start r
   assert.equal(await store.approved(session.snapshot, f.config), false);
   const foreground = await store.start(id, f.config);
   assert.equal(foreground.question.id, 'count'); assert.equal(generations, 1);
+});
+
+test('the background worker curates the working context once before preparing, with the push range', async t => {
+  const f = await fixture(t);
+  const curated = [];
+  await schedulePreparation(f.options);
+  const env = { ...f.env, OPENROUTER_API_KEY: 'test-key' };
+  const ready = await runPreparation({ ...f.options, env, store: f.store, curate: async ({ prompt, config }) => { curated.push({ prompt, model: config.model }); return { overview: 'Bumps the count.', items: [] }; } });
+  assert.equal(ready.status, 'ready');
+  assert.equal(curated.length, 1);
+  assert.equal(curated[0].model, f.config.models.small.model);
+  assert.match(curated[0].prompt, /count = 2/, 'The curator sees the unpushed change');
 });

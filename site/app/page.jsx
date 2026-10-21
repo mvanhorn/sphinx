@@ -1,4 +1,5 @@
 import CopyCommand from './copy-command';
+import Logo from './logo';
 
 const REPO = 'https://github.com/parthh01/sphinx';
 const NPM = 'https://www.npmjs.com/package/sphinx-understand';
@@ -14,7 +15,7 @@ export default function Home() {
   return (
     <div className="page">
       <header className="top">
-        <a className="wordmark" href="#">sphinx</a>
+        <a className="wordmark" href="#"><Logo />sphinx</a>
         <nav>
           <a href="#start">Install</a>
           <a href={REPO}>GitHub</a>
@@ -25,7 +26,7 @@ export default function Home() {
         <section className="hero">
           <ul className="chips"><li>Free</li><li><a href={REPO}>FOSS</a></li></ul>
           <blockquote>
-            <p>“Outsource your thinking,<br /> not your <em>understanding</em>.”</p>
+            <p>“You can outsource your thinking,<br /> but not your <em>understanding</em>.”</p>
           </blockquote>
           <p className="attribution">— <a href={QUOTE}>Sun Tzu</a></p>
           <p className="lede">
@@ -33,11 +34,13 @@ export default function Home() {
             question about what that code actually does.
           </p>
           <CopyCommand command="npm install -g sphinx-understand" />
+          <p className="tokens">Built to run on minimal tokens, from your existing coding agent, OpenRouter, or any OpenAI-compatible endpoint.</p>
         </section>
 
         <section className="riddle" aria-label="Example checkpoint">
           <div className="line cmd"><span className="sigil">$</span> git push origin main</div>
-          <div className="line dim">sphinx · understanding check for main · 4 files changed</div>
+          <div className="line dim">sphinx · understanding check for main</div>
+          <div className="line dim">11 files changed · <span className="add">+5,012</span> <span className="del">−3,147</span></div>
 
           <div className="exchange">
             <p className="speaker">Sphinx</p>
@@ -75,10 +78,17 @@ export default function Home() {
           </ol>
         </section>
 
+        <section className="demo" aria-label="Demo">
+          <figure>
+            <img src="/demo.gif" width="960" height="576" alt="A git push waits while the Sphinx questionnaire asks what the change does, the answer passes, and the push continues." />
+            <figcaption>The real questionnaire: a push waits, you answer, Git continues.</figcaption>
+          </figure>
+        </section>
+
         <section className="facts">
           <p>
             Works with <strong>Codex, Claude Code, Cursor, OpenCode,</strong> and <strong>Pi</strong>, or plain Git.
-            Reviews run on your Codex or Claude sign-in, or on OpenRouter. Your answers never reach the coding agent,
+            Your answers never reach the coding agent,
             and <code>.env</code> files and keys are never opened. In a hurry? <code>sphinx yolo</code> lets pushes
             through, and every skip is logged.
           </p>

@@ -8,6 +8,8 @@ import { getPaths, loadConfig, policyHash, readJson, writeJson } from './config.
 import { matches, pushSnapshots, repository, revalidateSnapshot } from './git.js';
 import { yoloStatus } from './overrides.js';
 import { createSessionStore } from './sessions.js';
+import { curateQuietly } from './working-context.js';
+import { collectGarbage } from './storage.js';
 
 const exec = promisify(execFile);
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -196,7 +198,7 @@ export async function schedulePreparation({ cwd = process.cwd(), env = process.e
   });
 }
 
-export async function runPreparation({ cwd = process.cwd(), env = process.env, config, store, generate, wait = delay } = {}) {
+export async function runPreparation({ cwd = process.cwd(), env = process.env, config, store, generate, wait = delay, curate } = {}) {
   if (env.SPHINX_EVALUATOR === '1') return { status: 'skipped', prepared: [], reason: 'Evaluator subprocesses do not prepare assessments.' };
   const repo = await repository(cwd), files = filesFor(repo.root, env);
   const latest = await readJson(files.latest, null);
@@ -219,6 +221,7 @@ export async function runPreparation({ cwd = process.cwd(), env = process.env, c
     claimed.status = status; claimed.updatedAt = new Date().toISOString();
     if (errorCode) claimed.errorCode = errorCode;
     await locked(files, () => writeJson(files.job(id), claimed));
+    await collectGarbage({ env });
     return { status, prepared: claimed.prepared, ...(errorCode ? { error: errors[errorCode] } : {}) };
   };
   // Yolo can be turned on while this worker runs. Every reviewer request
@@ -237,6 +240,10 @@ export async function runPreparation({ cwd = process.cwd(), env = process.env, c
       const effective = await loadConfig(snapshot.repoRoot, env);
       if (policyHash(effective) !== policyHash(currentConfig) || !await revalidateSnapshot(snapshot, effective, { env })) throw new Error('The snapshot or policy changed before preparation.');
     } });
+    // One cheap free-model call keeps the branch's working context current, so
+    // the review below and the one at push time start already oriented.
+    const lead = plan.snapshots[0];
+    await curateQuietly({ repoRoot: repo.root, sourceRef: lead.sourceRef, base: lead.base, head: lead.head, config: plan.config, env, wait, call: curate });
     for (const snapshot of plan.snapshots) {
       const current = await readJson(files.latest, null);
       if (current?.id !== id) return finish('stale');

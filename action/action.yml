@@ -1,0 +1,16 @@
+name: Sphinx stamp
+description: Shows a Sphinx check on pull requests from the stamp a contributor's Sphinx posts after they pass its understanding check.
+author: parthh01
+branding:
+  icon: check-circle
+  color: orange
+inputs:
+  token:
+    description: Token that can write check runs and read pull requests and comments.
+    default: ${{ github.token }}
+  require:
+    description: "true makes a missing stamp fail the check (use with a required status check); false leaves it neutral."
+    default: "false"
+runs:
+  using: node24
+  main: index.mjs

@@ -168,6 +168,30 @@ test('gated hooks preserve stdin and arguments and do not bypass an original rej
   assert.equal(await dispatchHook({ event: 'pre-commit', args: [], input: '', cwd: f.repo, env: { ...f.env, SPHINX_EVALUATOR: '1' }, gate: async () => 23 }), 0);
 });
 
+test('fresh repositories initialize and clone after global installation while existing reference hooks still reject', async t => {
+  const f = await fixture(t);
+  await install(f.options);
+  const run = (args, cwd = f.base) => execFileSync('git', args, { cwd, env: f.env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trimEnd();
+  run(['init', '-q', 'fresh']);
+  run(['init', '-q', '--bare', 'fresh.git']);
+  for (const directory of ['fresh/.git', 'fresh.git']) assert.match(run(['--git-dir', directory, 'symbolic-ref', 'HEAD']), /^refs\/heads\//);
+  run(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'base'], path.join(f.base, 'fresh'));
+  run(['clone', '-q', 'fresh', 'cloned']);
+  run(['clone', '-q', '--bare', 'fresh', 'cloned.git']);
+  assert.equal(run(['rev-parse', 'HEAD'], path.join(f.base, 'cloned')), run(['rev-parse', 'HEAD'], path.join(f.base, 'fresh')));
+
+  const rejecting = '#!/bin/sh\ncat >/dev/null\n[ "$1" = prepared ] && { echo rejected by original hook >&2; exit 9; }\nexit 0\n';
+  const template = path.join(f.base, 'template');
+  await executable(path.join(template, 'hooks/reference-transaction'), rejecting);
+  // Older Git creates the initial HEAD without running reference-transaction.
+  let initRunsHook = true;
+  try { run(['-c', `core.hooksPath=${path.join(template, 'hooks')}`, 'init', '-q', 'probe']); initRunsHook = false; } catch {}
+  if (initRunsHook) assert.throws(() => run(['init', '-q', `--template=${template}`, 'templated']), error => /rejected by original hook/.test(error.stderr));
+  f.git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'base');
+  await executable(path.join(f.repo, '.git/hooks/reference-transaction'), rejecting);
+  assert.throws(() => f.git('update-ref', 'refs/heads/blocked', 'HEAD'), error => /rejected by original hook/.test(error.stderr));
+});
+
 test('generated gate dispatcher safely quotes the Node, CLI and state paths', async t => {
   const f = await fixture(t);
   await install(f.options);
@@ -340,7 +364,8 @@ test('native questionnaire hooks register host MCP servers without changing unre
     for (const event of events) {
       const group = document.hooks[event][0];
       assert.equal(group.matcher, 'Bash');
-      assert.deepEqual(group.hooks[0], { type: 'mcp_tool', server: 'sphinx', tool: 'sphinx_checkpoint', input: { cwd: '${cwd}', host: name, hookEvent: '${hook_event_name}', hostSession: '${session_id}' }, timeout: 1800, statusMessage: 'Sphinx understanding check' });
+      // A command hook needs no MCP connection, so sessions opened before install never error.
+      assert.deepEqual(group.hooks[0], { type: 'command', command: document.hooks.SessionStart[0].hooks[0].command, timeout: 1800, statusMessage: 'Sphinx understanding check' });
     }
   }
   const toml = await readFile(tomlFile, 'utf8');
@@ -517,4 +542,49 @@ test('preparation hooks preserve streaming input and original status while sched
   for (const hook of ['post-commit', 'post-merge', 'post-rewrite', 'post-checkout']) assert.match(await readFile(path.join(hookDir, hook), 'utf8'), / prepare <\/dev\/null >\/dev\/null 2>&1 &/);
   await uninstall(f.options);
   assert.equal(await readFile(path.join(f.repo, '.git/hooks/post-rewrite'), 'utf8'), '#!/bin/sh\nread first\nprintf "ack:%s\\n" "$first"\nread second\nprintf "done:%s:%s\\n" "$1" "$second"\nexit 13\n');
+});
+
+test('a dotfiles-symlinked Claude settings file is updated through its link, and uninstall keeps the target', async t => {
+  const f = await fixture(t);
+  const dotfiles = path.join(f.base, 'dotfiles'), target = path.join(dotfiles, 'claude-settings.json'), link = path.join(f.paths.claudeHome, 'settings.json');
+  await mkdir(dotfiles, { recursive: true }); await mkdir(f.paths.claudeHome, { recursive: true });
+  await writeFile(target, JSON.stringify({ theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'mine' }] }] } }));
+  await symlink(target, link);
+  await install({ ...f.options, agents: 'claude' });
+  assert.ok((await lstat(link)).isSymbolicLink(), 'The dotfiles link is kept');
+  const updated = await json(target);
+  assert.equal(updated.theme, 'dark');
+  assert.ok(updated.hooks.SessionStart?.length && updated.hooks.PostToolUse?.length, 'Hooks were written to the link target');
+  assert.deepEqual(updated.hooks.Stop, [{ hooks: [{ type: 'command', command: 'mine' }] }]);
+  await uninstall({ env: f.env });
+  assert.ok((await lstat(link)).isSymbolicLink());
+  const restored = await json(target);
+  assert.equal(restored.theme, 'dark');
+  assert.equal(restored.hooks.SessionStart, undefined);
+});
+
+test('a dangling settings symlink fails with a clear message and changes nothing', async t => {
+  const f = await fixture(t);
+  await mkdir(f.paths.claudeHome, { recursive: true });
+  await symlink(path.join(f.base, 'missing.json'), path.join(f.paths.claudeHome, 'settings.json'));
+  await assert.rejects(install({ ...f.options, agents: 'claude' }), /symlink to a missing file/);
+});
+
+test('hooks call the package manager shim on PATH so upgrades keep working; a checkout falls back to absolute paths', async t => {
+  const { sphinxLauncher } = await import('../src/install.js');
+  const f = await fixture(t);
+  const cli = path.join(f.base, 'store', 'sphinx-understand@0.1.0_abc', 'node_modules', 'sphinx-understand', 'bin', 'sphinx.js');
+  await executable(cli, '#!/usr/bin/env node\n');
+  const npmBin = path.join(f.base, 'npm-bin'), pnpmBin = path.join(f.base, 'pnpm-home'), other = path.join(f.base, 'other');
+  await mkdir(npmBin, { recursive: true }); await symlink(cli, path.join(npmBin, 'sphinx'));
+  await executable(path.join(pnpmBin, 'sphinx'), '#!/bin/sh\nexec node "$basedir/global/5/node_modules/sphinx-understand/bin/sphinx.js" "$@"\n');
+  await executable(path.join(other, 'sphinx'), '#!/bin/sh\necho unrelated tool\n');
+  const node = '/opt/node/bin/node', q = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+  const npm = await sphinxLauncher(cli, { PATH: [other, npmBin].join(path.delimiter) }, node);
+  assert.equal(npm.command, q(path.join(npmBin, 'sphinx')), 'An unrelated sphinx earlier on PATH is skipped');
+  assert.equal(npm.env, `PATH='/opt/node/bin':"$PATH" `);
+  const pnpm = await sphinxLauncher(cli, { PATH: pnpmBin }, node);
+  assert.equal(pnpm.command, q(path.join(pnpmBin, 'sphinx')));
+  const checkout = await sphinxLauncher(cli, { PATH: other }, node);
+  assert.deepEqual(checkout, { env: '', command: `${q(node)} ${q(cli)}` });
 });

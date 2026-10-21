@@ -230,3 +230,17 @@ test('malformed credential files never echo their content in errors', async t =>
 test('advisory mode was removed and fails with a pointer to yolo', () => {
   assert.throws(() => validateConfig({ ...structuredClone(DEFAULT_CONFIG), mode: 'advisory' }), /advisory" was removed.*sphinx yolo/);
 });
+
+test('understanding distance defaults to mixed, accepts high and low, and a repository can override it', async t => {
+  assert.equal(DEFAULT_CONFIG.distance, 'mixed');
+  for (const value of ['high', 'low']) assert.equal(validateConfig({ ...structuredClone(DEFAULT_CONFIG), distance: value }).distance, value);
+  assert.throws(() => validateConfig({ ...structuredClone(DEFAULT_CONFIG), distance: 'medium' }), /distance must be high, mixed, low/);
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { loadConfig } = await import('../src/config.js');
+  const dir = await mkdtemp(join(tmpdir(), 'sphinx-distance-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, '.sphinxconfig'), JSON.stringify({ version: 1, distance: 'low' }));
+  assert.equal((await loadConfig(dir, { SPHINX_HOME: join(dir, 'home') })).distance, 'low');
+});

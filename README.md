@@ -1,6 +1,13 @@
-# Sphinx
+<p align="center"><img src="docs/logo.svg" width="96" alt="Sphinx logo"></p>
 
-Outsource your thinking, not your understanding.
+<h1 align="center">Sphinx</h1>
+
+<p align="center"><em>You can outsource your thinking, but not your understanding.</em></p>
+
+<p align="center"><img src="docs/demo.gif" width="860" alt="A git push pauses while Sphinx asks a question about the change in a local browser page; after a correct answer the push continues."></p>
+
+<p align="center"><b>Works with</b> Claude Code · Codex · Cursor · OpenCode · Pi · or a plain <code>git push</code><br>
+<b>Reviews run on</b> your Claude Code or Codex plan · OpenRouter · any OpenAI-compatible endpoint</p>
 
 Sphinx adds an understanding check to agent-assisted development. When you push to a protected branch, Git waits while Sphinx asks you to predict what your change will do. If you miss something, it explains and gives you a new scenario to try. Once you pass, the same push continues. This works whether you or a coding agent ran `git push`.
 
@@ -53,6 +60,8 @@ You should see:
 ```
 
 Use `--preset codex-economy` for Codex, or `--agents none` if you don't use a coding agent. Other presets, OpenRouter, OpenAI-compatible endpoints, and custom routes are covered in [configuration](docs/configuration.md#reviewer-models).
+
+Settings files symlinked into a dotfiles repository (Stow, Dotbot, chezmoi, home-manager) are supported: Sphinx edits the link's target in place and keeps the link. Hooks call the `sphinx` command your package manager installed (npm, pnpm, yarn, or Bun), so upgrading the package keeps them working.
 
 ### 2. Load Sphinx in your coding agent (required if you use one)
 
@@ -128,6 +137,8 @@ Pushing the same change again does not ask again. A pass lasts 24 hours, unless 
 - **Skip this time.** Lets the push through immediately, even while the review is still running. Skips never count as passing.
 - **`sphinx yolo`** turns checks off for the current repository, or globally when run outside one. Run it again to turn checks back on. A repository's own setting wins over the global one, so turning yolo off inside a repository keeps checks on there even while global yolo is on. `--reason "prod hotfix"` is optional.
 - **`sphinx check`** runs the same check in your terminal instead of the browser.
+- **Headless or terminal-first.** Over SSH, or anywhere Sphinx can't open the browser in the background, the questions appear right in the terminal where you ran `git push`. Type `/hint`, `/learn`, `/dispute <reason>`, `/skip`, or `/quit` there. To always use the terminal, run `sphinx config --interface terminal`; to always use the browser, use `--interface browser`.
+- **On GitHub.** With the GitHub CLI (`gh`) signed in, a pass stamps the pushed commit. For a push to a pull request branch, the questionnaire offers "Post the Sphinx stamp to the pull request": a comment summarising the questions and first-try results. Add the Sphinx Action to a repository (`sphinx init --github-check`) and its pull requests show a **Sphinx** check: stamped with that summary, or neutral until the author passes. None of this ever blocks a push. See [GitHub stamps and the Sphinx check](docs/configuration.md#github-commit-status-and-pull-requests).
 
 Every skip and yolo toggle is logged with its reason, and `sphinx status` lists recent ones. If Git exited before you finished, for example because your agent's shell timed out, run the push once more. Never start a second copy while one is still waiting. For more cases, see [troubleshooting](docs/integrations.md#troubleshooting).
 
@@ -135,7 +146,7 @@ Your answers go straight from the page to Sphinx. Your coding agent sees only th
 
 ## Limits and cost
 
-Question count depends on the size of the change and the depth you choose. Small changes get one question, and large ones get up to three at the default depth. After commits, Sphinx prepares questions in the background, so they are often ready by the time you push. Calls, tokens, and (when reported) cost appear in the questionnaire.
+Question count depends on the size of the change and the depth you choose: small changes get up to one question (none for documentation or trivial edits), and large ones up to three at the default depth. Understanding distance sets how close to the code questions get: `high` asks about high-level design (what your change does, how it fits into the system, and what it affects), `low` asks about low-level implementation details (its specific logic, conditions, and edge cases), and `mixed`, the default, is a bit of both. Set it in setup, with `sphinx config --distance low`, per repository in `.sphinxconfig`, or from the distance chip in the questionnaire, which saves it to this repository's `.sphinxconfig` for your next check. After commits, Sphinx prepares questions in the background, so they are often ready by the time you push. Calls, tokens, and (when reported) cost appear in the questionnaire.
 
 ```sh
 sphinx config --max-model-calls 30        # optional cap per check (1–100)
@@ -171,6 +182,118 @@ Each command explains itself with `sphinx <command> --help`. `--json` gives mach
 - [Integrations and troubleshooting](docs/integrations.md): Codex, Claude Code, Pi, Cursor, OpenCode, fallback forms, SSH, existing hooks, the JSON protocol, and uninstalling.
 - [Architecture](docs/architecture.md): the checkpoint sequence, the reviewer and its evidence, compaction, and state.
 - [Evaluation](eval/README.md) and [results](eval/RESULTS.md).
+
+## Configuring Sphinx
+
+Sphinx has two kinds of settings:
+- **Your own machine-wide settings** in `~/.config/sphinx/config.json`. Change them with `sphinx config`.
+- **Per-repository files** that you commit so collaborators share them: `.sphinxconfig`, `.sphinxignore`, and `.sphinxcontext.md`. `sphinx init` creates them.
+
+`sphinx config` with no flags shows the settings in effect for the current repository.
+
+### Switch the reviewer model
+
+Each change gets a small, medium, or large route depending on its size. A preset fills all three:
+
+```sh
+sphinx config --preset claude-economy                 # your Claude Code plan
+sphinx config --preset codex-economy                  # your Codex plan
+sphinx config --preset openrouter-value --allow-paid  # paid OpenRouter credits
+sphinx config --preset openrouter-free                # free, slower, rate limited
+```
+
+Or set each size yourself as `provider:model`:
+
+```sh
+sphinx config --small claude:haiku --medium claude:haiku --large claude:sonnet
+```
+
+To use any OpenAI-compatible endpoint (OpenAI, Groq, Together, Ollama, LM Studio, vLLM, and others):
+
+```sh
+sphinx auth --provider openai --base-url https://api.openai.com/v1   # asks for the key
+sphinx config --provider openai --model gpt-5-mini
+```
+
+`sphinx auth` saves or replaces your OpenRouter key. Claude Code and Codex routes bill your signed-in plan, and Sphinx strips API keys from their environment. `--cli-billing api` lets them use API keys instead. A new route applies to new checks.
+
+If a review is rate limited or a CLI fails mid-check, the questionnaire offers to switch to one of your installed coding plans.
+
+### `.sphinxconfig`: when checks run
+
+```json
+{
+  "version": 1,
+  "events": ["pre-push"],
+  "branches": ["main", "release/*"],
+  "remotes": ["*"],
+  "level": "standard",
+  "distance": "mixed",
+  "exclude": ["vendor/**"]
+}
+```
+
+| Setting | What it means |
+| --- | --- |
+| `enabled` | `false` turns Sphinx off for this repository |
+| `events` | `pre-push` (default), `pre-commit`, or both |
+| `branches` | Branches that trigger a check. Pushes match the destination, commits match the current branch. `["*"]` checks every branch, which is useful for pull requests |
+| `remotes` | Remote names that trigger push checks; `*` (default) means any |
+| `level` | How many questions: `relaxed`, `standard` (default), or `thorough` |
+| `distance` | `high`: high-level design, meaning what the change does, how it fits into the system, and what it affects. `low`: low-level implementation details, meaning its specific logic, conditions, and edge cases. `mixed` (default): a bit of both. The questionnaire's distance chip changes it for the repository from the next check |
+| `exclude` | Extra paths to keep from the reviewer, on top of `.sphinxignore` |
+| `backgroundPreparation` | `false` stops preparing questions in the background after commits |
+| `github` | GitHub commit status and pull request comment; see below |
+
+### `.sphinxignore`: files the reviewer never sees
+
+It uses gitignore-style patterns:
+
+```gitignore
+internal/customer-exports/
+/config/production.json
+*.generated.ts
+dist/
+```
+
+`.env` files, private keys, and common credential files are always excluded, and a repository can't undo that. A change that only touches ignored files needs no check. The rules match paths, so they won't catch a secret pasted into ordinary source.
+
+### `.sphinxcontext.md`: what the project is, and what to ask about
+
+The reviewer reads this file with every request. It has two parts:
+
+```markdown
+## About this project
+A booking service for shared equipment. Reservations must never overlap.
+
+## What to ask about
+- Don't ask about styling, layout, or copy changes.
+- Focus on reservation conflicts and billing.
+```
+
+**About this project** gives background, which the reviewer checks against the code. **What to ask about** holds your preferences. Questions avoid the areas you skip and lean toward the ones you name. A change entirely in a skipped area, such as a CSS-only restyle, can pass with no questions. A second, independent audit can still overrule that when the change also affects behavior, data, or security.
+
+For preferences in every repository, use `~/.config/sphinx/context.md`; `sphinx install` creates it. Where the two disagree, the repository's file wins. HTML comments in either file are guidance for you and are never sent to the model. Keep each under 16 KB and free of secrets. Editing either one means the next check is reviewed fresh.
+
+`sphinx init` creates `.sphinxcontext.md` and keeps it out of Git on your machine (in `.git/info/exclude`), because preferences are personal. To share it with your team, run `git add -f .sphinxcontext.md` and commit it.
+
+### Your own settings
+
+These live in `config.json`, and most can be set with `sphinx config`:
+
+| Setting | Flag | What it means |
+| --- | --- | --- |
+| `models` | `--preset`, `--small`, `--medium`, `--large` | The reviewer for each change size |
+| `interface` | `--interface` | Where questions appear. `auto` (default): the browser on a local Mac, otherwise the terminal you pushed from. Or `browser` / `terminal` |
+| `maxModelCalls` | `--max-model-calls` | Optional cap on model requests per check (1–100, or `unlimited`, the default) |
+| `maxOutputTokens` | `--max-output-tokens` | Output allowance per request, including reasoning (default 4096) |
+| `allowPaid` | `--allow-paid` | Lets OpenRouter use paid models |
+| `cliBilling` | `--cli-billing` | `plan` (default) bills your Claude or Codex plan; `api` lets those CLIs use API keys |
+| `github` | edit the file | `status` (default on): mark pushed commits on GitHub. `comment`: keep a summary comment on the pull request. `answers`: include your answers in it. Needs a signed-in `gh` CLI and never blocks a push |
+| `audit` | edit the file | `large` (default): a second, independent model call checks the questions only for large changes, so small and medium checks are ready sooner. `all`: audit every change, slower but more thorough |
+| `receiptHours` | edit the file | How long a pass stays valid for the same change (default 24) |
+
+`sphinx yolo` turns checks off and on again for the current repository, or globally when run outside one. The full reference, including routing thresholds and pricing, is in [configuration and cost](docs/configuration.md).
 
 ## Development
 

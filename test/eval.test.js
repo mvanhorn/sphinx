@@ -9,7 +9,7 @@ test('curated eval fixtures exercise real immutable repos, Pi review, and all gr
   const report = await runEvaluation();
   assert.equal(report.status, 'passed');
   assert.equal(report.cases.length, 5);
-  assert.equal(report.usage.calls, 59);
+  assert.equal(report.usage.calls, 56, 'small and medium cases skip the separate audit by default');
   assert.equal(report.usage.responses.length, 0, 'Scripted transports make no network requests');
   assert.match(report.interpretation, /do not measure model quality/);
   for (const result of report.cases) {
@@ -57,7 +57,7 @@ test('curated minimum criteria exclude teaching details while retaining the aske
 });
 
 test('one run-wide budget includes grading and prevents an extra request', async () => {
-  const report = await runEvaluation({ cases: CASES.slice(0, 2), maxCalls: 3 });
+  const report = await runEvaluation({ cases: CASES.slice(0, 2), maxCalls: 3, config: { ...structuredClone(DEFAULT_CONFIG), audit: 'all' } });
   assert.equal(report.usage.calls, 3);
   assert.equal(report.cases.length, 1);
   assert.equal(report.status, 'failed');
@@ -191,7 +191,7 @@ test('live adapter mode sends only synthetic filtered evidence, records costs, a
     }
     return new Response(JSON.stringify({ model: 'synthetic-model', choices: [{ finish_reason, message }], usage: { cost: 0.001, prompt_tokens: 100, completion_tokens: 20 } }));
   };
-  const report = await runEvaluation({ cases: [fixture], live: true, apiKey: 'TEST_EVAL_KEY_NEVER_RETAIN', fetchImpl, maxCalls: 12, maxCost: 0.1, delayMs: 0 });
+  const report = await runEvaluation({ cases: [fixture], live: true, apiKey: 'TEST_EVAL_KEY_NEVER_RETAIN', fetchImpl, maxCalls: 12, maxCost: 0.1, delayMs: 0, config: { ...structuredClone(DEFAULT_CONFIG), audit: 'all' } });
   assert.equal(report.status, 'passed', JSON.stringify(report.cases.map(item => ({ error: item.error, findings: item.findings, grades: item.grades.map(grade => ({ id: grade.id, error: grade.error })) }))));
   assert.equal(requests, 12); assert.equal(report.usage.calls, 12);
   assert.ok(Math.abs(report.usage.reportedCostUsd - 0.012) < 1e-9);
@@ -249,7 +249,7 @@ test('live evaluation requires an explicit key and a supported route before fixt
 
 test('a rejected audit retains its synthetic candidate, exact archive and audit transcript', async () => {
   const fixture = CASES[0]; let turns = 0;
-  const report = await runEvaluation({ cases: [fixture], live: true, apiKey: 'fake-audit-key', maxCalls: 3, delayMs: 0,
+  const report = await runEvaluation({ cases: [fixture], live: true, apiKey: 'fake-audit-key', maxCalls: 3, delayMs: 0, config: { ...structuredClone(DEFAULT_CONFIG), audit: 'all' },
     fetchImpl: async (_url, options) => {
       const body = JSON.parse(options.body); let message, finish_reason;
       if (body.tools) {
