@@ -352,7 +352,7 @@ test('truncated, refused, malformed, and provider-error responses never pass', a
 
 test('output-limit errors identify the actual budget and safe usage counts without accepting partial JSON', async () => {
   let calls = 0;
-  await assert.rejects(callOpenRouter({ ...defaults, config: { ...defaults.config, maxOutputTokens: 2500 }, fetchImpl: async () => {
+  await assert.rejects(callOpenRouter({ ...defaults, config: { ...defaults.config, allowPaid: true, model: 'deepseek/deepseek-v3.2', maxOutputTokens: 2500 }, fetchImpl: async () => {
     calls++;
     return Response.json({
       choices: [{ finish_reason: 'length', native_finish_reason: apiKey, message: { content: JSON.stringify(result), reasoning: apiKey } }],
@@ -367,6 +367,27 @@ test('output-limit errors identify the actual budget and safe usage counts witho
     return true;
   });
   assert.equal(calls, 1);
+});
+
+test('free-router output-limit errors name the openrouter-free preset and its budget', async () => {
+  const truncated = async () => Response.json({ choices: [{ finish_reason: 'length', message: { content: '' } }], usage: { completion_tokens: 4096, completion_tokens_details: { reasoning_tokens: 4096 } } });
+  await assert.rejects(callOpenRouter({ ...defaults, config: { ...defaults.config, model: 'openrouter/free', maxOutputTokens: 4096 }, fetchImpl: truncated }), error => {
+    assert.match(error.message, /request budget: 4096 tokens/);
+    assert.match(error.message, /openrouter-free preset needs a 16384-token output budget/);
+    assert.match(error.message, /sphinx config --max-output-tokens 16384/);
+    assert.match(error.message, /sphinx config --preset openrouter-free/);
+    return true;
+  });
+  await assert.rejects(callOpenRouter({ ...defaults, config: { ...defaults.config, model: 'openrouter/free', maxOutputTokens: 16384 }, fetchImpl: truncated }), error => {
+    assert.match(error.message, /openrouter-free preset already uses its 16384-token maximum/);
+    assert.ok(!error.message.includes('--max-output-tokens'));
+    return true;
+  });
+  await assert.rejects(callOpenRouter({ ...defaults, config: { ...defaults.config, allowPaid: true, model: 'deepseek/deepseek-v3.2' }, fetchImpl: truncated }), error => {
+    assert.ok(!error.message.includes('openrouter-free'));
+    assert.match(error.message, /Increase maxOutputTokens/);
+    return true;
+  });
 });
 
 test('non-budget failures have distinct advice and never recommend increasing tokens', async () => {
