@@ -131,3 +131,14 @@ test('actual default browser hook continues one original push after direct fixtu
   assert.ok(calls.every(call => !call.leaked), 'Ignored fixture data must never enter any outbound prompt');
   await assert.rejects(fetch(`${nextPage.url}/state`));
 });
+
+test('a check passed with sphinx answer while the browser page waits lets the same push continue', { timeout: 60000 }, async t => {
+  const f = await fixture(t), head = await f.git('rev-parse', 'HEAD');
+  const push = f.startPush(), page = await f.question(push);
+  const answered = JSON.parse((await exec(process.execPath, [CLI, 'answer', page.state.id, '--text', 'No. Set membership returns before another insertion in the same process.', '--json'], { cwd: f.repo, env: f.env, timeout: 20000 })).stdout);
+  assert.equal(answered.status, 'passed');
+  const passed = await Promise.race([push.finished, delay(15000).then(() => assert.fail(`The push kept waiting after the CLI pass: ${push.output()}`))]);
+  assert.equal(passed.code, 0, passed.stderr); assert.match(passed.stderr, /Continuing this Git operation/);
+  assert.equal(await f.bare('rev-parse', 'refs/heads/main'), head);
+  assert.equal(f.children.length, 1); assert.deepEqual(await f.hooks(), ['pre-push']);
+});

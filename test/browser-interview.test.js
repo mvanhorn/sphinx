@@ -520,3 +520,25 @@ test('a follow-up whose ID matches a later question still lets that question app
   assert.ok(shown.some(text => /Second question/.test(text)), `question 2 must be shown: ${JSON.stringify(shown)}`);
   assert.notEqual(f.interview.state.messages.filter(item => item.kind === 'question').at(-2).questionId, f.interview.state.question.id, 'the follow-up was renamed apart from question 2');
 });
+
+test('answers saved outside the page, as sphinx answer or a terminal check does, release the waiting Git operation', async t => {
+  const f = await fixture(t, { interviewOptions: { watchMs: 20 } }), done = f.present(); await f.waitFor('question');
+  // A separate store on the same state directory is what another sphinx process sees.
+  const cli = createSessionStore({ env: f.env, grade: async request => { await request.beforeCall(); return { verdict: 'correct', feedback: 'Correct from the CLI.', followUp: null }; } });
+  await cli.answer(f.snapshot.id, 'Yes, the retry repeats the insert.', f.config);
+  const result = await Promise.race([done, delay(3000).then(() => 'still waiting')]);
+  assert.deepEqual(result, { status: 'passed', id: f.snapshot.id });
+  assert.equal(f.interview.state.phase, 'passed'); assert.equal(f.graded(), 0);
+  assert.ok(f.interview.state.messages.some(item => item.kind === 'feedback' && item.text === 'Correct from the CLI.'));
+  assert.equal(await f.store.approved(f.snapshot, f.config), true);
+});
+
+test('a wrong answer saved outside the page moves the page to the transfer question', async t => {
+  const f = await fixture(t, { interviewOptions: { watchMs: 20 } }), done = f.present(); await f.waitFor('question');
+  const cli = createSessionStore({ env: f.env, grade: async request => { await request.beforeCall(); return { verdict: 'incorrect', feedback: 'Nothing deduplicates.', followUp: { ...q, id: 'transfer', prompt: 'What changes after restart?' } }; } });
+  await cli.answer(f.snapshot.id, 'No.', f.config);
+  for (let i = 0; i < 300 && f.interview.state.question?.id !== 'transfer'; i++) await delay(10);
+  assert.equal(f.interview.state.question.id, 'transfer'); assert.equal(f.interview.state.phase, 'question');
+  assert.equal((await f.post('answer', { response: 'The set is recreated.' })).status, 202);
+  assert.equal((await done).status, 'passed'); assert.equal(f.graded(), 1);
+});
