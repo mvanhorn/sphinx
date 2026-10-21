@@ -305,5 +305,6 @@ test('free routing remains an explicit best-effort choice and help never saves p
   await f.absent(f.configPath);
   const free = JSON.parse(f.ok(['config', '--preset', 'openrouter-free', '--json']));
   assert.equal(free.config.allowPaid, false);
-  for (const route of Object.values(free.config.models)) assert.deepEqual(route, { provider: 'openrouter', model: 'openrouter/free' });
+  for (const route of Object.values(free.config.models)) assert.deepEqual(route, { provider: 'openrouter', model: 'openrouter/free' });  // Free router models spend most of the output budget on reasoning (CRI-58).
+  assert.equal(free.config.maxOutputTokens, 16384);
 });

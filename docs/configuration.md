@@ -75,7 +75,7 @@ Pi, Cursor, and OpenCode integrations present checkpoints but do not supply a re
 Filtered evidence goes to OpenRouter and its selected upstream provider, billed separately from your coding-agent plan. Paid routes need OpenRouter credits.
 
 - **Paid consent.** Guided setup labels paid choices. Noninteractive commands need `--allow-paid` or an existing `allowPaid: true` setting. Free routes send zero-price provider limits even when another route permits paid models. There are no automatic paid fallbacks.
-- **Free router.** `openrouter-free` is best-effort. Its model selection, rate limits, and tool support can interrupt a check; see [OpenRouter limits](https://openrouter.ai/docs/api_reference/limits). Sphinx does not switch providers or upgrade models after a failure.
+- **Free router.** `openrouter-free` is best-effort. Its model selection, rate limits, and tool support can interrupt a check; see [OpenRouter limits](https://openrouter.ai/docs/api_reference/limits). Sphinx does not switch providers or upgrade models after a failure. The preset sets `maxOutputTokens` to 16,384 because free models often spend most of the output budget on hidden reasoning. Installs that chose this preset before that default keep their saved 4,096; run `sphinx config --max-output-tokens 16384` if a check stops with `finish_reason: length`.
 - **Endpoint compatibility.** Requests need endpoint support for tools and output parameters. Capability metadata is a compatibility check, not a guarantee; unusable output leaves the check pending. See OpenRouter [provider routing](https://openrouter.ai/docs/guides/routing/provider-selection) and [structured outputs](https://openrouter.ai/docs/guides/features/structured-outputs).
 
 ### OpenAI-compatible endpoints
@@ -154,7 +154,7 @@ Other limits always apply:
 | `timeoutSeconds` | 180 | The whole investigation. Unlimited calls do not mean unlimited time. |
 | `maxContextBytes` | 100,000 | Serialized review context (prompts, tools, schemas), not the whole diff. Pi compacts before this; context that still does not fit is rejected before a model call. |
 | `toolResultBytes` | 16,000 | Each tool page. Pages shrink to leave room for batched reads. |
-| `maxOutputTokens` | 4,096 (8,192 in `openrouter-value`) | Every request, 512–16,384. Set with `sphinx config --max-output-tokens 8192`. |
+| `maxOutputTokens` | 4,096 (8,192 in `openrouter-value`, 16,384 in `openrouter-free`) | Every request, 512–16,384. Set with `sphinx config --max-output-tokens 8192`. |
 
 OpenRouter counts hidden reasoning within `maxOutputTokens`; a higher ceiling can prevent truncation and permits more billed output. Codex and Claude CLIs get concise-output instructions and local timeout and output-byte limits, but their interfaces have no equivalent hard token cap. Small and medium changes request low reasoning effort; large changes request medium effort where the CLI supports it.
 

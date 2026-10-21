@@ -2,6 +2,7 @@ import { openRouterKey, openAIEndpoint } from './config.js';
 import { reportUsage } from './usage.js';
 import { textStream, readCompletionStream } from './stream.js';
 import { MAX_REVIEWER_TOOL_CALLS } from './reviewer-limits.js';
+import { REVIEWER_PRESETS } from './model-presets.js';
 
 const incomplete = 'No completion was recorded; Sphinx did not retry automatically.';
 const MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60;
@@ -106,6 +107,15 @@ function tokenUsage(data) {
 // One chat-completions client serves OpenRouter and any OpenAI-compatible endpoint.
 const isOpenAI = config => config?.provider === 'openai';
 const label = config => isOpenAI(config) ? 'The OpenAI-compatible endpoint' : 'OpenRouter';
+const FREE_ROUTER_BUDGET = REVIEWER_PRESETS.find(preset => preset.id === 'openrouter-free').maxOutputTokens;
+
+// The free router's models often spend the whole budget on reasoning, so name
+// the preset and its own budget rather than only the generic config key.
+function outputLimitAdvice(config) {
+  if (isOpenAI(config) || (config.model || 'openrouter/free') !== 'openrouter/free') return 'Increase maxOutputTokens in your global Sphinx configuration or select another compatible model.';
+  if (!(config.maxOutputTokens < FREE_ROUTER_BUDGET)) return `The openrouter-free preset already uses its ${FREE_ROUTER_BUDGET}-token maximum. The free router selects a model per request, so a retry may succeed; otherwise choose another preset with sphinx config --preset.`;
+  return `The openrouter-free preset needs a ${FREE_ROUTER_BUDGET}-token output budget for reasoning-heavy free models. Run sphinx config --max-output-tokens ${FREE_ROUTER_BUDGET} (or reapply the preset with sphinx config --preset openrouter-free), then retry.`;
+}
 
 function requireFinishedChoice(data, config, allowTools = false, headers) {
   const name = label(config);
@@ -113,7 +123,7 @@ function requireFinishedChoice(data, config, allowTools = false, headers) {
   const choice = Array.isArray(data.choices) ? data.choices[0] : undefined;
   if (choice?.error || choice?.finish_reason === 'error') throw providerError(`${name} reported a provider error during generation (finish_reason: error)`, choice.error, undefined, headers);
   if (choice?.finish_reason === 'length') {
-    throw new Error(`${name} cut off the assessment at its output limit (finish_reason: length; request budget: ${config.maxOutputTokens} tokens, including reasoning).${tokenUsage(data)} Increase maxOutputTokens in your global Sphinx configuration or select another compatible model. ${incomplete}`);
+    throw new Error(`${name} cut off the assessment at its output limit (finish_reason: length; request budget: ${config.maxOutputTokens} tokens, including reasoning).${tokenUsage(data)} ${outputLimitAdvice(config)} ${incomplete}`);
   }
   if (choice?.finish_reason === 'content_filter' || choice?.message?.refusal) {
     throw new Error(`${name} refused or filtered the assessment. Review the selected model's content policy or select another compatible model. ${incomplete}`);
