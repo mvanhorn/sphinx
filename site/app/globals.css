@@ -49,8 +49,9 @@ code { font-family: var(--mono), ui-monospace, Menlo, monospace; font-size: .86e
 .page { max-width: 760px; margin: 0 auto; padding: 0 28px; }
 
 /* Top bar */
-.top { display: flex; justify-content: space-between; align-items: baseline; padding: 28px 0; }
-.wordmark { font: 400 26px/1 var(--serif); text-decoration: none; letter-spacing: -.01em; }
+.top { display: flex; justify-content: space-between; align-items: center; padding: 28px 0; }
+.wordmark { display: inline-flex; align-items: center; gap: 10px; font: 400 26px/1 var(--serif); text-decoration: none; letter-spacing: -.01em; }
+.wordmark .logo { color: var(--accent); }
 .top nav { display: flex; gap: 24px; font-size: 15px; color: var(--muted); }
 .top nav a { text-decoration: none; }
 .top nav a:hover { color: var(--ink); }
@@ -64,7 +65,7 @@ code { font-family: var(--mono), ui-monospace, Menlo, monospace; font-size: .86e
 blockquote { margin: 0; }
 blockquote p {
   margin: 0;
-  font: 400 clamp(36px, 8.4vw, 76px)/1.02 var(--serif);
+  font: 400 clamp(32px, 7vw, 62px)/1.04 var(--serif);
   letter-spacing: -.015em;
   text-indent: -.38em;
 }
@@ -80,12 +81,16 @@ blockquote em { color: var(--accent); }
 .command button { font: 500 13px var(--mono), monospace; color: var(--paper); background: var(--ink); border: 0; border-radius: 7px; padding: 9px 14px; cursor: pointer; min-width: 92px; }
 .command button:hover { opacity: .85; }
 
+.tokens { margin: 18px 0 0; font-size: 14.5px; color: var(--muted); }
+
 /* The riddle */
 .riddle { margin: 24px 0 0; padding: 30px 34px 26px; background: var(--slab); color: var(--slab-ink); border-radius: 14px; }
 .riddle .line { font: 14px/1.7 var(--mono), monospace; }
 .riddle .sigil { display: inline-block; width: 1.4em; color: var(--slab-muted); }
 .riddle .dim { color: var(--slab-muted); padding-left: 1.4em; }
 .riddle .ok { margin-top: 22px; color: var(--ok); }
+.riddle .add { color: var(--ok); }
+.riddle .del { color: var(--slab-accent); }
 .riddle .ok .sigil { color: var(--ok); }
 .exchange { margin: 26px 0 0; padding: 26px 0 4px; border-top: 1px solid var(--slab-rule); }
 .speaker { margin: 0 0 6px; font: 500 11px/1 var(--mono), monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--slab-muted); }
@@ -104,6 +109,11 @@ blockquote em { color: var(--accent); }
 .how p { margin: 0; font-size: 15.5px; color: var(--muted); }
 
 /* Facts */
+.demo { padding: 0 0 80px; }
+.demo figure { margin: 0; }
+.demo img { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--rule); }
+.demo figcaption { margin-top: 12px; font-size: 14px; color: var(--faint); text-align: center; }
+@media (min-width: 960px) { .demo figure { margin: 0 -80px; } }
 .facts { padding: 44px 0 80px; border-top: 1px solid var(--rule); }
 .facts p { margin: 0; font: 400 26px/1.42 var(--serif); color: var(--muted); }
 .facts strong { font-weight: 400; color: var(--ink); }

@@ -1,5 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { launchCheckpointTerminal, waitForCheckpointTerminal } from './terminal-launch.js';
+import { spawn } from 'node:child_process';
+import { openSync, closeSync } from 'node:fs';
+import { CLI, launchCheckpointTerminal, waitForCheckpointTerminal } from './terminal-launch.js';
 
 /** Collect human input in a separate terminal while the original Git hook waits.
  * The caller owns queue cleanup and must validate the receipt before returning 0.
@@ -38,7 +40,7 @@ export async function runGitCheckpointTerminal({ request, env = process.env, sig
       controller.signal.throwIfAborted();
       const status = await waitForResult({ id: request.id, env, timeoutMs: Math.max(1, deadline - Date.now()), signal: controller.signal });
       controller.signal.throwIfAborted();
-      return result(['passed', 'pending', 'unavailable', 'interrupted'].includes(status) ? status : 'interrupted');
+      return result(['passed', 'skipped', 'pending', 'unavailable', 'interrupted'].includes(status) ? status : 'interrupted');
     } catch { return stopped ? result('pending', stopped) : result('interrupted'); }
   };
   try { return await Promise.race([operation(), interrupted]); }
@@ -48,4 +50,41 @@ export async function runGitCheckpointTerminal({ request, env = process.env, sig
     // or coding client. A human may still save progress in that window.
     controller.abort();
   }
+}
+
+/** Whether to ask in the terminal instead of the browser. `auto` uses the
+ * browser only where Sphinx can open it in the background (local macOS). */
+export function prefersTerminal(config, { env = process.env, platform = process.platform } = {}) {
+  if (config.interface === 'terminal') return true;
+  if (config.interface === 'browser') return false;
+  return !!(env.SSH_CONNECTION || env.SSH_TTY) || platform !== 'darwin';
+}
+
+// The terminal Git was run from, if a person is looking at it. A coding
+// agent's shell has no visible terminal, so its pipes never qualify.
+function openVisibleTerminal(stderr = process.stderr) {
+  if (!stderr.isTTY) return null;
+  try { return openSync('/dev/tty', 'r+'); } catch { return null; }
+}
+
+/**
+ * Ask in the terminal: inline in Git's own terminal when a person is there,
+ * otherwise in a new terminal window. Resolves { status: 'unavailable' } when
+ * neither is possible, so the caller can fall back to the browser.
+ */
+export async function runGitTerminalCheck({ request, env = process.env, signal, cwd = process.cwd(), openTty = openVisibleTerminal, spawnImpl = spawn, openWindow = runGitCheckpointTerminal } = {}) {
+  const tty = openTty();
+  if (tty === null) return openWindow({ request, env, signal });
+  try {
+    const code = await new Promise(resolve => {
+      let child;
+      try { child = spawnImpl(process.execPath, [CLI, 'check', '--id', request.id], { cwd, env: { ...env, SPHINX_WAITING_GIT: '1' }, stdio: [tty, tty, tty] }); }
+      catch { resolve(null); return; }
+      const onAbort = () => child.kill('SIGINT');
+      signal?.addEventListener('abort', onAbort, { once: true });
+      child.once('error', () => resolve(null));
+      child.once('exit', exit => { signal?.removeEventListener('abort', onAbort); resolve(exit); });
+    });
+    return { id: request.id, status: code === 0 ? 'passed' : code === 3 ? 'skipped' : code === null ? 'unavailable' : 'pending' };
+  } finally { try { closeSync(tty); } catch { /* Already closed. */ } }
 }

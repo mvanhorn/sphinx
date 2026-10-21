@@ -226,3 +226,63 @@ test('errors while loading an active questionnaire are not treated as failed rev
   await assert.rejects(f.run(() => assert.fail('active questionnaire offered recovery'), { start: async () => { throw new Error('Unable to load'); } }), /Unable to load/);
   assert.equal(f.authorizations(), 0);
 });
+
+const rateLimit = () => Object.assign(new Error('OpenRouter HTTP 429 (code: 429; error_type: rate_limit_exceeded).'), { code: 'OPENROUTER_PROVIDER_ERROR', status: 429, errorType: 'rate_limit_exceeded' });
+
+test('an OpenRouter rate limit offers the installed coding-agent plans, and switching moves only this check', async t => {
+  const providers = [];
+  const f = await fixture(t, { generate: async (attempt, options) => {
+    await options.beforeCall();
+    if (attempt === 1) throw rateLimit();
+    return { questions: [question] };
+  } });
+  const seen = [];
+  const store = f.store;
+  const original = store.start;
+  store.start = async (...args) => { seen.push((await store.read(snapshot.id)).route.provider); return original(...args); };
+  const result = await f.run(prompt => prompt.choices[0].value, {
+    planProviders: ['claude', 'codex'],
+    switchRoute: async provider => { providers.push(provider); return store.switchRoute(snapshot.id, f.config, provider); },
+    start: () => store.start(snapshot.id, f.config),
+  });
+  assert.deepEqual(f.prompts[0].choices.map(choice => choice.value).slice(0, 2), ['switch-claude', 'switch-codex']);
+  assert.match(f.prompts[0].choices[0].description, /signed-in Claude plan instead of OpenRouter/);
+  assert.deepEqual(providers, ['claude']);
+  assert.deepEqual(seen, ['openrouter', 'claude']);
+  assert.equal(result.status, 'active');
+  const saved = await store.read(snapshot.id);
+  assert.deepEqual([saved.route.provider, saved.route.model], ['claude', 'haiku']);
+  assert.equal(saved.routeChanges.length, 1);
+  assert.equal(saved.routeChanges[0].from.provider, 'openrouter');
+  assert.equal(f.config.models.small.provider, 'openrouter', 'Saved routes are untouched');
+});
+
+test('no switch is offered for other failures, without installed plans, or when already on a plan', async t => {
+  for (const [error, plans] of [[failure(), ['claude']], [rateLimit(), []]]) {
+    const f = await fixture(t, { generate: async (attempt, options) => { await options.beforeCall(); if (attempt === 1) throw error; return { questions: [question] }; } });
+    await f.run(() => 'pause', { planProviders: plans, switchRoute: async () => assert.fail('No switch expected') });
+    assert.ok(f.prompts[0].choices.every(choice => !choice.value.startsWith('switch-')));
+  }
+});
+
+test('switching a check drops unanswered investigation but keeps questions, usage, and progress', async t => {
+  const f = await fixture(t, { generate: async (_attempt, options) => { await options.beforeCall(); return { questions: [question] }; } });
+  await f.store.start(snapshot.id, f.config);
+  const before = await f.store.read(snapshot.id);
+  const switched = await f.store.switchRoute(snapshot.id, f.config, 'codex');
+  assert.equal(switched.route.provider, 'codex');
+  const after = await f.store.read(snapshot.id);
+  assert.equal(after.calls, before.calls);
+  assert.deepEqual(after.questions, before.questions, 'Questions survive a mid-grading switch');
+  await assert.rejects(f.store.switchRoute(snapshot.id, f.config, 'openrouter'), /Only Claude Code or Codex/);
+});
+
+test('a coding-agent CLI failure names the CLI and offers the other installed plan', async t => {
+  const cliFailure = Object.assign(new Error('Codex reported: something broke.'), { code: 'PROVIDER_FAILED' });
+  const f = await fixture(t, { generate: async (attempt, options) => { await options.beforeCall(); if (attempt === 1) throw cliFailure; return { questions: [question] }; } });
+  await f.store.switchRoute(snapshot.id, f.config, 'codex');
+  await f.run(prompt => prompt.choices[0].value, { planProviders: ['claude', 'codex'], switchRoute: provider => f.store.switchRoute(snapshot.id, f.config, provider), start: () => f.store.start(snapshot.id, f.config) });
+  assert.equal(f.prompts[0].title, 'Codex could not run this review');
+  assert.deepEqual(f.prompts[0].choices.filter(choice => choice.value.startsWith('switch-')).map(choice => choice.value), ['switch-claude'], 'Never offers the CLI that just failed');
+  assert.equal((await f.store.read(snapshot.id)).route.provider, 'claude');
+});

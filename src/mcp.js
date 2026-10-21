@@ -1,4 +1,5 @@
 import { TextDecoder } from 'node:util';
+import { VERSION } from './version.js';
 
 export const MCP_PROTOCOL_VERSION = '2025-11-25';
 const SUPPORTED_VERSIONS = new Set([MCP_PROTOCOL_VERSION, '2025-06-18']);
@@ -310,7 +311,7 @@ export function runMcpServer({
       if (negotiation) { rpcError(id, -32600, 'The MCP connection is already initialized.'); return; }
       if (!object(params) || !boundedString(params.protocolVersion, 64) || !params.protocolVersion || !object(params.capabilities) || !object(params.clientInfo)) { rpcError(id, -32602, 'Initialize requires protocolVersion, capabilities, and clientInfo.'); return; }
       negotiation = { protocolVersion: SUPPORTED_VERSIONS.has(params.protocolVersion) ? params.protocolVersion : MCP_PROTOCOL_VERSION, capabilities: params.capabilities };
-      result(id, { protocolVersion: negotiation.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'sphinx', title: 'Sphinx', version: '0.1.0' } });
+      result(id, { protocolVersion: negotiation.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'sphinx', title: 'Sphinx', version: VERSION } });
       return;
     }
     if (!ready) { rpcError(id, -32002, 'Initialize the MCP connection before using tools.'); return; }

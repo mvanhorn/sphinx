@@ -14,8 +14,8 @@ for (const agent of ['codex', 'claude']) {
     assert.match(context, /keeps the original Git operation waiting/);
     assert.match(context, /that same operation continues automatically/);
     assert.match(context, /Do not start a duplicate Git operation while it waits/);
-    assert.match(context, /MCP hook offers a native questionnaire after Git exits/);
-    assert.match(context, /fallback forms do not resume an exited Git process/);
+    assert.match(context, /PostToolUse hook opens the same local browser questionnaire after the shell command exits/);
+    assert.match(context, /This fallback does not resume an exited Git process/);
     assert.match(context, /verify that the original Git operation has exited with a Sphinx blocking failure before retrying/);
     assert.match(context, /Never duplicate a waiting operation or repeat a successful operation/);
     assert.match(context, /waits up to 25 minutes, but the host may cancel the shell sooner/);
@@ -54,4 +54,17 @@ test('Claude session setup tags future shell commands without reading or replaci
   assert.equal(await readFile(file, 'utf8'), saved, 'Unexpected session IDs cannot inject shell syntax');
   await agentHook({ agent: 'claude', input: { hook_event_name: 'SessionStart', session_id: 'evaluator' }, env: { ...env, SPHINX_EVALUATOR: '1' } });
   assert.equal(await readFile(file, 'utf8'), saved);
+});
+
+test('post-tool hooks need no MCP server: silent with nothing queued, and never fail the agent', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = (await import('node:path')).default;
+  const home = await mkdtemp(path.join(tmpdir(), 'sphinx-post-'));
+  try {
+    for (const agent of ['claude', 'codex']) for (const event of agent === 'claude' ? ['PostToolUse', 'PostToolUseFailure'] : ['PostToolUse']) {
+      const result = await agentHook({ agent, input: JSON.stringify({ hook_event_name: event, tool_name: 'Bash', cwd: home, session_id: 's1' }), env: { SPHINX_HOME: home, SPHINX_USER_HOME: home } });
+      assert.deepEqual(result, { output: null, exitCode: 0 });
+    }
+  } finally { await rm(home, { recursive: true, force: true }); }
 });

@@ -6,7 +6,7 @@ const serif = Instrument_Serif({ subsets: ['latin'], weight: '400', style: ['nor
 const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['400', '500'], variable: '--mono' });
 
 export const metadata = {
-  title: 'Sphinx — outsource your thinking, not your understanding',
+  title: 'Sphinx — you can outsource your thinking, but not your understanding',
   description: 'A Git hook for agent-assisted development. Before your agent’s code ships, Sphinx asks you a question about what it actually does.',
 };
 

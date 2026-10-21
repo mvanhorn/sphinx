@@ -74,11 +74,11 @@ test('missing authentication fails before a request and an isolated saved key is
 });
 
 test('HTTP errors remain actionable without exposing authentication or the provider response body', async () => {
-  for (const [status, message, attempts] of [[401, /sphinx auth/, 1], [429, /Provider or account rate limit.*will not switch models/, 4], [400, /structured-output/, 1], [402, /insufficient credits/, 1], [503, /unavailable/, 4], [502, /Request failed/, 4], [404, /No compatible provider/, 4]]) {
+  for (const [status, message, attempts] of [[401, /sphinx auth/, 1], [429, /Provider or account rate limit.*switch this check to your Claude Code or Codex plan/, 4], [400, /structured-output/, 1], [402, /insufficient credits/, 1], [503, /unavailable/, 4], [502, /Request failed/, 4], [404, /No compatible provider/, 4]]) {
     let calls = 0;
     await assert.rejects(callOpenRouter({ ...defaults, fetchImpl: async () => { calls++; return new Response(`server diagnostic ${apiKey}`, { status }); } }), error => {
       assert.match(error.message, message);
-      assert.match(error.message, attempts === 1 ? /did not retry or switch models/ : /after 4 attempts; Sphinx retried with backoff but did not switch models/);
+      assert.match(error.message, attempts === 1 ? /did not retry automatically/ : /after 4 attempts; Sphinx retried with backoff\./);
       assert.ok(!error.message.includes(apiKey));
       return true;
     });
@@ -108,7 +108,7 @@ test('retries honor Retry-After, stop when the provider asks for a long wait, an
   waits = []; calls = 0;
   await assert.rejects(callOpenRouter({ ...defaults, sleep: async ms => { waits.push(ms); }, fetchImpl: limited('3600') }), error => {
     assert.equal(error.retryAfterSeconds, 3600);
-    assert.match(error.message, /did not retry or switch models/);
+    assert.match(error.message, /did not retry automatically/);
     return true;
   });
   assert.deepEqual(waits, []); assert.equal(calls, 1);
@@ -147,7 +147,7 @@ test('HTTP rate-limit and availability errors expose a bounded Retry-After delay
       assert.ok(error instanceof OpenRouterError); assert.equal(error.status, status);
       assert.equal(error.retryAfterSeconds, seconds);
       assert.match(error.message, seconds === 0 ? /retry delay has elapsed/ : new RegExp(`Wait at least ${seconds} second`));
-      assert.match(error.message, attempts === 1 ? /did not retry or switch models/ : /after 4 attempts/);
+      assert.match(error.message, attempts === 1 ? /did not retry automatically/ : /after 4 attempts/);
       assert.ok(!JSON.stringify(error).includes(apiKey)); assert.ok(!error.message.includes(apiKey));
       return true;
     });
@@ -228,7 +228,7 @@ test('a timeout after HTTP headers identifies the response-body timeout without 
         } }));
       } }), error => {
         assert.match(error.message, /timed out while reading the response body/);
-        assert.match(error.message, /did not retry or switch models/);
+        assert.match(error.message, /did not retry automatically/);
         assert.doesNotMatch(error.message, /JSON|oversized/);
         assert.ok(!error.message.includes(apiKey)); assert.equal(error.cause, undefined);
         return true;
@@ -263,7 +263,7 @@ test('interrupted, oversized, and malformed bodies have distinct sanitized diagn
     let calls = 0, charges = 0;
     await assert.rejects(callOpenRouter({ ...defaults, beforeCall: async () => { charges++; }, fetchImpl: async () => { calls++; return response(); } }), error => {
       assert.match(error.message, expected);
-      assert.match(error.message, /No completion was recorded; Sphinx did not retry or switch models/);
+      assert.match(error.message, /No completion was recorded; Sphinx did not retry automatically/);
       assert.ok(!error.message.includes(apiKey)); assert.ok(!JSON.stringify(error).includes(apiKey));
       assert.equal(error.cause, undefined);
       return true;
@@ -362,7 +362,7 @@ test('output-limit errors identify the actual budget and safe usage counts witho
     assert.match(error.message, /finish_reason: length; request budget: 2500 tokens, including reasoning/);
     assert.match(error.message, /2500 completion tokens, 2490 reasoning tokens/);
     assert.match(error.message, /Increase maxOutputTokens in your global Sphinx configuration/);
-    assert.match(error.message, /did not retry or switch models/);
+    assert.match(error.message, /did not retry automatically/);
     assert.ok(!error.message.includes(apiKey));
     return true;
   });
@@ -554,7 +554,7 @@ test('native batch failures distinguish zero calls from overflow without disclos
       assert.ok(error.message.includes(`finish_reason: ${finish_reason}`));
       assert.match(error.message, /120 completion tokens, 100 reasoning tokens/);
       assert.match(error.message, count === 0 ? /requires a workspace call or finish_review/ : /batch limit of 8.*No tools from this response were executed/);
-      assert.match(error.message, /did not retry or switch models/);
+      assert.match(error.message, /did not retry automatically/);
       assert.ok(!error.message.includes(apiKey));
       return true;
     });

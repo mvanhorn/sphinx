@@ -11,8 +11,8 @@ try {
     input += chunk;
   }
   const payload = JSON.parse(input || '{}');
-  const { hook_event_name, session_id, conversation_id, cwd, tool_name, tool_output, error_message } = payload;
-  process.stdout.write(`${JSON.stringify(await cursorAgentHook({ input: { hook_event_name, session_id, conversation_id, cwd, tool_name, tool_output, error_message } }))}\n`);
+  const { hook_event_name, session_id, conversation_id, cwd, workspace_roots, tool_name, tool_output, error_message } = payload;
+  process.stdout.write(`${JSON.stringify(await cursorAgentHook({ input: { hook_event_name, session_id, conversation_id, cwd, workspace_roots, tool_name, tool_output, error_message } }))}\n`);
 } catch {
   process.stdout.write(`${JSON.stringify({ additional_context: 'Sphinx could not inspect this hook event. The human can run sphinx doctor and sphinx check in their own terminal.' })}\n`);
 }

@@ -64,10 +64,12 @@ async function fixture(t, { background = false } = {}) {
     const output = ok(process.execPath, [CLI, ...args]);
     // These gate tests control evaluation explicitly. The background E2E below
     // opts in separately, so detached workers never race unrelated assertions.
-    if (args[0] === 'install' && !args.includes('--repo') && !args.includes('--help') && !args.includes('-h') && !background) {
+    // Their scripted model also expects the independent audit on every change.
+    if (args[0] === 'install' && !args.includes('--repo') && !args.includes('--help') && !args.includes('-h')) {
       const file = path.join(env.SPHINX_HOME, 'config.json');
       const config = JSON.parse(readFileSync(file, 'utf8'));
-      config.backgroundPreparation = false;
+      if (!background) config.backgroundPreparation = false;
+      config.audit = 'all';
       writeFileSync(file, JSON.stringify(config));
     }
     return output;
@@ -157,7 +159,7 @@ test('CLI keeps a failed evaluator pending and enforces the checkpoint on retry'
   assert.notEqual(f.run('git', ['push', 'origin', 'main']).status, 0);
   const failure = f.run(process.execPath, [CLI, 'check', '--json'], { env: { ...f.env, SPHINX_TEST_FAILURE: '1' } });
   assert.notEqual(failure.status, 0);
-  assert.match(failure.stderr, /No completion was\s+recorded/);
+  assert.match(failure.stderr, /No completion\s+was\s+recorded/);
   assert.equal(f.cliJson('pending')[0].status, 'pending');
   assert.notEqual(f.run('git', ['push', 'origin', 'main']).status, 0);
   const first = f.cliJson('check');
@@ -241,7 +243,7 @@ test('interactive CLI stays open after review failure until the human pauses or 
   assert.match(resumed.output(), /original Git operation is waiting/);
   await rm(marker);
   resumed.child.stdin.write('1\n');
-  await resumed.waitFor('Your answer:');
+  await resumed.waitFor('› ');
   resumed.child.stdin.write('No. The existing ID is rejected before insertion.\n');
   assert.equal(await resumed.done, 0);
   assert.match(resumed.output(), /Understanding check complete/);
@@ -547,6 +549,12 @@ test('native resume trims a legacy small-change questionnaire without regenerati
 
 test('post-commit preparation investigates before push and the native gate reuses the exact prepared questions', { timeout: 30000 }, async t => {
   const f = await fixture(t, { background: true });
+  // Background curation of the working context runs on the same small-change
+  // route, and a failed call is followed by a plan sign-in check. Count only
+  // review and grading calls below.
+  const curator = call => call.input.includes('You keep a brief orientation for a code reviewer');
+  const allCalls = f.calls;
+  f.calls = async () => (await allCalls()).filter(call => !curator(call) && call.argv[0] !== 'auth');
   // Establish local tracking metadata before installing hooks; no inference.
   f.git('push', '-u', 'origin', 'main');
   f.cli('install', '--yes', '--provider', 'claude', '--agents', 'none');
@@ -571,6 +579,9 @@ test('post-commit preparation investigates before push and the native gate reuse
   assert.equal(status.preparation?.status, 'ready');
   assert.equal(status.pending.length, 1);
   assert.equal(status.pending[0].status, 'active');
+  const all = await allCalls();
+  assert.ok(all.some(curator), 'The working context was curated in the background');
+  assert.equal(all.filter(curator).some(call => call.input.includes('do-not-transmit-92bfa')), false);
   const generated = await f.calls();
   assert.equal(generated.length, 3, 'Reviewer requested a diff, read its observation, then audited the questions before any push');
   assert.ok(generated.every(call => call.input.includes(projectContext)));
@@ -602,4 +613,17 @@ test('without a call cap, --retry-review simply continues a failed review', { ti
   assert.equal(retried.status, 'active');
   assert.equal(retried.usage.limit, null);
   assert.ok(retried.usage.calls > before.usage.calls, 'Prior usage is kept and counted');
+});
+
+test('a documentation-only push goes through with no questionnaire and no model call', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  f.git('push', '-u', 'origin', 'main');
+  f.cli('install', '--yes', '--provider', 'claude', '--agents', 'none');
+  await writeFile(path.join(f.repo, 'README.md'), '# Queue\n\nUsage notes.\n');
+  f.git('add', 'README.md'); f.git('commit', '-qm', 'Docs');
+  const before = (await f.calls()).length;
+  const pushed = f.run('git', ['push', 'origin', 'main']);
+  assert.equal(pushed.status, 0, pushed.stderr);
+  assert.match(pushed.stderr, /documentation-only change to refs\/heads\/main; no questions needed/);
+  assert.equal((await f.calls()).length, before, 'No model was called');
 });

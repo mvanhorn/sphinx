@@ -329,7 +329,8 @@ test('a small change requests one bounded question and rejects an oversized ques
     const { evaluator } = await fixture(t, null, { openRouterTurn: nativeResponse({ questions: [question] }, args => { request = args; }) });
     assert.equal((await evaluator.generateAssessment(change, runtime)).questions.length, 1);
     assert.equal(request.tools.find(tool => tool.function.name === 'finish_review').function.parameters.properties.assessment.properties.questions.maxItems, 1);
-    assert.match(JSON.stringify(request.messages), /Ask at most 1 question,/);
+    assert.match(JSON.stringify(request.messages), /Ask at most 1 question\. This is a small change/);
+    assert.match(JSON.stringify(request.messages), /ask no questions and give a one-sentence noQuestionReason/);
     assert.match(JSON.stringify(request.messages), /one bounded outcome/);
     assert.match(JSON.stringify(request.messages), /visual or styling change/);
     assert.doesNotMatch(JSON.stringify(request.messages), /Use exactly/);
@@ -372,7 +373,8 @@ test('correct grading uses the precommitted rubric and keeps the verbatim answer
   assert.match(calls[0].input, /Accept behavioral equivalents in ordinary language/);
   assert.match(calls[0].input, /quoting the combined if expression is not required/);
   assert.match(calls[0].input, /without pixel values or specificity notation/);
-  assert.match(calls[0].input, /if the human omits a requested outcome, return value, ordering, or essential causal relationship/);
+  assert.match(calls[0].input, /looking for evidence of understanding, not a precise or complete answer/);
+  assert.match(calls[0].input, /return ambiguous only when the essential prediction or reason is genuinely absent/);
   assert.match(calls[0].input, /under this question's stated conditions, not a different failure or success scenario/);
   const data = JSON.parse(calls[0].input.split('\n').at(-1));
   assert.deepEqual(data.question.acceptance, question.acceptance);
@@ -852,4 +854,98 @@ test('real subprocess runner reports missing executable with an actionable error
     command: '/definitely-not-an-installed-sphinx-provider', args: [],
     cwd: tmpdir(), env: process.env, input: '', timeoutMs: 1000,
   }), { code: 'PROVIDER_START_FAILED' });
+});
+
+test('a correct grade may return empty feedback, but an incorrect one must explain itself', async t => {
+  const pass = await fixture(t, { questionValid: true, verdict: 'correct', feedback: '', evidence: question.evidence, followUp: null });
+  assert.equal((await pass.evaluator.gradeAnswer({ snapshot, question, answer: 'It inserts again on retry.', config })).feedback, '');
+  const fail = await fixture(t, { questionValid: true, verdict: 'incorrect', feedback: '', evidence: question.evidence, followUp: transfer });
+  await assert.rejects(fail.evaluator.gradeAnswer({ snapshot, question, answer: 'No.', config }), /Feedback must be nonempty/);
+});
+
+test('zero questions needs a reason, is offered only for small changes, and the audit can overrule it', async t => {
+  const { evaluator } = await fixture(t, null, {
+    openRouterTurn: nativeResponse({ questions: [], noQuestionReason: 'Only reformats whitespace.' }),
+    openRouter: async invocation => { await invocation.beforeCall(); return { questions: [] }; },
+  });
+  const change = { ...snapshot, files: ['src/orders.js'], stats: { additions: 3, deletions: 3, files: 1 } };
+  const settings = { ...DEFAULT_CONFIG, maxModelCalls: 20, agentMaxTurns: 8 };
+  const runtime = evaluatorConfig(settings, selectRoute(change, settings));
+  const agreed = await evaluator.generateAssessment(change, runtime);
+  assert.deepEqual([agreed.questions.length, agreed.noQuestionReason], [0, 'Only reformats whitespace.']);
+  const overruled = await fixture(t, null, {
+    openRouterTurn: nativeResponse({ questions: [], noQuestionReason: 'Trivial.' }),
+    openRouter: async invocation => { await invocation.beforeCall(); return { questions: [question] }; },
+  });
+  const result = await overruled.evaluator.generateAssessment(change, runtime);
+  assert.equal(result.questions.length, 1, 'The audit added the question the reviewer skipped');
+});
+
+test('question prompts follow the configured understanding distance', async t => {
+  for (const [distance, expected, absent] of [['high', /Understanding distance: high/, /Understanding distance: low/], ['low', /Understanding distance: low/, /Understanding distance: high/]]) {
+    let request;
+    const { evaluator } = await fixture(t, null, { openRouterTurn: nativeResponse({ questions: [question] }, args => { request ??= args; }) });
+    await evaluator.generateAssessment(snapshot, { ...config, provider: 'openrouter', distance });
+    assert.match(JSON.stringify(request.messages), expected);
+    assert.doesNotMatch(JSON.stringify(request.messages), absent);
+  }
+});
+
+test('stated preferences steer questions and let a larger change in a skipped area ask none', async t => {
+  const change = { ...snapshot, files: ['src/orders.js'], stats: { additions: 900, deletions: 300, files: 30 } };
+  const settings = { ...DEFAULT_CONFIG, maxModelCalls: 20, agentMaxTurns: 8 };
+  const runtime = evaluatorConfig(settings, selectRoute(change, settings));
+  const schemaFor = request => request.tools.find(tool => tool.function.name === 'finish_review').function.parameters.properties.assessment;
+  let plain;
+  await (await fixture(t, null, { openRouterTurn: nativeResponse({ questions: [question] }, args => { plain = args; }) })).evaluator.generateAssessment(change, runtime);
+  assert.equal(schemaFor(plain).properties.questions.minItems, 1, 'without preferences a larger change needs a question');
+  assert.doesNotMatch(JSON.stringify(plain.messages), /Question preferences/);
+  let steered;
+  const preferred = { ...change, projectContext: { path: '.sphinxcontext.md', text: '', preferences: "- Don't ask me about styling.", hash: 'h' } };
+  await (await fixture(t, null, { openRouterTurn: nativeResponse({ questions: [question] }, args => { steered = args; }) })).evaluator.generateAssessment(preferred, runtime);
+  assert.equal(schemaFor(steered).properties.questions.minItems, 0);
+  assert.match(JSON.stringify(steered.messages), /Question preferences/);
+  assert.match(JSON.stringify(steered.messages), /entire change falls in areas the person's preferences say to skip/);
+});
+
+test('a new question with any choices is told to use none; legacy questions keep their 2–6 rule', () => {
+  const base = { id: 'q1', concept: 'c', prompt: 'What happens on retry? Why?', expectedAnswer: 'a', rationale: 'r', evidence: [{ path: 'src/orders.js', reason: 'x' }], acceptance: { prediction: 'p', causalReason: 'c' } };
+  const paths = new Set(['src/orders.js']);
+  for (const count of [1, 2, 7]) {
+    const choices = Array.from({ length: count }, (_, i) => `choice ${i}`);
+    assert.throws(() => validateNewQuestion({ ...base, choices }, paths), /New questions must use choices:\[\]/, `${count} choices`);
+  }
+  assert.equal(validateNewQuestion({ ...base, choices: [] }, paths).id, 'q1');
+  assert.throws(() => validateQuestion({ ...base, choices: ['only'] }, paths), /empty or contain 2–6 alternatives/);
+  assert.deepEqual(validateQuestion({ ...base, choices: ['Yes', 'No'] }, paths).choices, ['Yes', 'No']);
+});
+
+test('/learn requires a new scenario: the schema demands it, and a reply without one is rejected', async t => {
+  const missing = { verdict: 'ambiguous', feedback: 'Here is how it works.', evidence: [{ path: 'src/orders.js', reason: 'The insert is unconditional.' }], followUp: null };
+  const { evaluator, calls } = await fixture(t, missing);
+  await assert.rejects(evaluator.gradeAnswer({ snapshot, question, answer: 'I do not know. Explain this concept.', config: { ...config, provider: 'claude' }, learn: true }), /without a new scenario/);
+  assert.match(calls[0].input, /^The human asked for an explanation instead of answering/);
+  const schema = JSON.parse(calls[0].args[calls[0].args.indexOf('--json-schema') + 1]);
+  assert.deepEqual(schema.properties.verdict.enum, ['incorrect'], 'the output schema allows only incorrect');
+  assert.equal(schema.properties.followUp.anyOf, undefined, 'and a new question is not optional');
+});
+
+test('mixed distance asks for both kinds of question; old checks without a setting keep high', async t => {
+  for (const [distance, pattern] of [['mixed', /Understanding distance: mixed\. Combine both kinds/], ['high', /Understanding distance: high\./], [undefined, /Understanding distance: high\./]]) {
+    const { evaluator, calls } = await fixture(t, { verdict: 'incorrect', feedback: 'No.', evidence: question.evidence, followUp: { ...question, id: 'next', prompt: 'A different retry: what now? Why?' } });
+    await evaluator.gradeAnswer({ snapshot, question, answer: 'It runs again.', config: { ...config, distance } }).catch(() => {});
+    assert.match(calls[0].input, pattern, String(distance));
+  }
+});
+
+test('by default only large changes get a separate audit; small ones check their own questions', async t => {
+  const change = { ...snapshot, files: ['src/orders.js'], stats: { additions: 14, deletions: 9, files: 1 } };
+  for (const [audit, expectAudit] of [['large', false], ['all', true]]) {
+    const settings = { ...DEFAULT_CONFIG, maxModelCalls: 20, agentMaxTurns: 8, audit };
+    const runtime = evaluatorConfig(settings, selectRoute(change, settings));
+    let request; const audits = [];
+    const { evaluator } = await fixture(t, null, { openRouterTurn: nativeResponse({ questions: [question] }, args => { request = args; }), openRouter: async invocation => { audits.push(invocation); return { questions: [question], feedback: '' }; } });
+    await evaluator.generateAssessment(change, runtime).catch(() => {});
+    assert.equal(/No separate audit follows/.test(JSON.stringify(request.messages)), !expectAudit, audit);
+  }
 });

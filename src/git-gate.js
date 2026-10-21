@@ -5,6 +5,10 @@ import { createSessionStore } from './sessions.js';
 import { queuePresentation, claimPresentation, listPresentations } from './presentations.js';
 import { createBrowserInterview } from './browser-interview.js';
 import { yoloStatus, recordOverride } from './overrides.js';
+import { dropContext } from './working-context.js';
+import { collectGarbage } from './storage.js';
+import { scheduleStamp } from './github.js';
+import { prefersTerminal, runGitTerminalCheck } from './git-interview.js';
 
 async function snapshotsFor({ event, args, input, cwd, config, env }) {
   if (event === 'pre-push') return pushSnapshots({ cwd, remote: args[0], remoteUrl: args[1], input, config, env });
@@ -27,7 +31,7 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
   store: providedStore, readConfig = loadConfig, snapshotsFor: collectSnapshots = snapshotsFor,
   revalidate = revalidateSnapshot, present, readYolo = yoloStatus, logOverride = recordOverride,
   queue = queuePresentation, claim = claimPresentation, listRequests = listPresentations,
-  output = line => process.stderr.write(`${line}\n`),
+  output = line => process.stderr.write(`${line}\n`), stamp = scheduleStamp, askInTerminal = runGitTerminalCheck,
 } = {}) {
   if (env.SPHINX_EVALUATOR === '1') return 0;
   signal?.throwIfAborted();
@@ -35,6 +39,11 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
   const config = await readConfig(repo.root, env);
   const snapshots = await collectSnapshots({ event, args, input, cwd, config, env });
   if (!snapshots.length) return 0;
+  // Once Git continues, the branch's working context has served its purpose.
+  const finished = async () => {
+    for (const snapshot of snapshots) if (snapshot.event === 'pre-push') await dropContext({ repoRoot: snapshot.repoRoot, sourceRef: snapshot.sourceRef, env }).catch(() => {});
+    await collectGarbage({ env });
+  };
   const validate = async (snapshot, expected) => {
     signal?.throwIfAborted();
     const current = await readConfig(snapshot.repoRoot, env);
@@ -48,6 +57,7 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
   if (yolo) {
     for (const snapshot of snapshots) await logOverride({ kind: 'yolo', repoRoot: repo.root, target: snapshot.target.ref, id: snapshot.id, head: snapshot.head, reason: yolo.reason }, env);
     output(`Sphinx: yolo mode is on ${yolo.scope === 'repo' ? 'for this repository' : 'globally'}; skipping the understanding check. Run sphinx yolo${yolo.scope === 'global' ? ' outside a repository' : ''} to turn it off.`);
+    await finished();
     return 0;
   }
   const store = providedStore ?? createSessionStore({ env, validate });
@@ -56,6 +66,7 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
     signal?.throwIfAborted();
     if (await store.approved(snapshot, config)) continue;
     const session = await store.ensure(snapshot, config);
+    if (await store.passTrivial?.(session.id, config, snapshot)) { output(`Sphinx: documentation-only change to ${snapshot.target.ref}; no questions needed.`); continue; }
     pending.push({ snapshot, session });
     output(`Sphinx: understanding check needed for ${snapshot.target.ref} (${session.route.tier} change).`);
   }
@@ -76,7 +87,9 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
     const interviewEnv = interviewEnvironment(cwd, env);
     for (let index = 0; index < requests.length; index++) {
       signal?.throwIfAborted();
-      const result = await (present || browser.present)({ request: requests[index], env: interviewEnv, signal });
+      // Headless sessions (or interface: terminal) ask in the terminal first; the browser is the fallback.
+      let result = !present && prefersTerminal(config, { env }) ? await askInTerminal({ request: requests[index], env: interviewEnv, signal, cwd }) : null;
+      if (!result || result.status === 'unavailable') result = await (present || browser.present)({ request: requests[index], env: interviewEnv, signal });
       signal?.throwIfAborted();
       if (result?.status === 'unavailable') {
         // Native callbacks only run after Git exits. Keep that explicit fallback
@@ -106,7 +119,16 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
       }
     }
     signal?.throwIfAborted();
-    if (requests.length) output('Sphinx: understanding check complete. Continuing this Git operation.');
+    // Skipped checks already reported themselves; only a pass is a completed check.
+    if (requests.length > skipped.size) output('Sphinx: understanding check complete. Continuing this Git operation.');
+    // GitHub stamps run detached after Git continues; they can never fail this push.
+    for (const snapshot of snapshots) {
+      try {
+        const session = await Promise.resolve(store.read?.(snapshot.id)).catch(() => null);
+        await stamp({ snapshot, session, outcome: skipped.has(snapshot.id) ? 'skipped' : 'passed', config, env, post: browser?.stampChoice?.(snapshot.id) });
+      } catch { /* Best-effort only. */ }
+    }
+    await finished();
     return 0;
   } finally {
     // A paused or cancelled batch must not reopen from an after-tool callback.

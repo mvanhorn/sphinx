@@ -295,3 +295,17 @@ test('environment bridge failures remain recorded and do not repeat on unrelated
   assert.equal((await launchCheckpointTerminal(options)).status, 'suppressed');
   assert.equal(calls, 1); assert.doesNotMatch(await readFile(f.recordFile, 'utf8'), /PRIVATE/);
 });
+
+test('an unfinished check keeps its window open until Enter, after recording the result', async t => {
+  for (const [code, status, paused] of [[1, 'pending', true], [0, 'passed', false], [3, 'skipped', false]]) {
+    const f = await fixture(t);
+    await launchCheckpointTerminal({ ...f.options, launch: async () => true });
+    const record = await json(f.recordFile); let recordedFirst;
+    const result = await runCheckpointTerminal({ recordFile: f.recordFile, token: record.token, env: f.env, isTTY: true,
+      pause: async () => { recordedFirst = (await json(f.recordFile)).status; },
+      spawnImpl: () => { const child = new EventEmitter(); child.pid = 1234567; setImmediate(() => child.emit('exit', code)); return child; } });
+    assert.equal(result.status, status);
+    assert.equal(recordedFirst !== undefined, paused, `${status} ${paused ? 'waits' : 'closes'}`);
+    if (paused) assert.equal(recordedFirst, 'pending', 'Git sees the result before the prompt');
+  }
+});

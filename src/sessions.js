@@ -1,10 +1,13 @@
 import path from 'node:path';
-import { withUsageMeter, addUsage } from './usage.js';
+import { REVIEWER_PRESETS } from './model-presets.js';
+import { recordAnswer, recordCheck } from './stats.js';
+import { withUsageMeter, withUsagePurpose, addUsage } from './usage.js';
 import { mkdir, open, readdir, stat, unlink } from 'node:fs/promises';
 import { DEFAULT_CONFIG, getPaths, readJson, writeJson, policyHash } from './config.js';
 import { selectRoute, evaluatorConfig, questionLimit } from './routing.js';
 import { generateAssessment, gradeAnswer } from './evaluator.js';
 import { setTimeout as delay } from 'node:timers/promises';
+import { hasPreferences } from './repo-context.js';
 
 const now = () => new Date().toISOString();
 export function sessionFile(id, env = process.env) {
@@ -90,6 +93,17 @@ export function savedDraft(session) {
   return { kind: draft.kind, text: draft.text };
 }
 
+// Documentation-only changes need no understanding check and no model call.
+const DOCUMENTATION = /(?:^|\/)(?:readme|license|licence|changelog|changes|authors|contributors|notice|code_of_conduct|contributing)(?:\.[a-z]+)?$|\.(?:md|mdx|markdown|txt|rst|adoc)$/iu;
+export const documentationOnly = files => Array.isArray(files) && files.length > 0 && files.every(file => typeof file === 'string' && DOCUMENTATION.test(file));
+function passWithoutQuestions(session, config, reason) {
+  session.questions = []; session.index = 0; session.status = 'passed'; session.noQuestionReason = reason;
+  session.expiresAt = new Date(Date.now() + config.receiptHours * 3600000).toISOString();
+  session.preparation = { status: 'ready', completedAt: now() };
+  delete session.reviewerCheckpoint;
+  session.updatedAt = now();
+}
+
 export function publicSession(session) {
   const q = session.questions[session.index];
   return {
@@ -103,7 +117,7 @@ export function publicSession(session) {
     // Concept labels are evaluator metadata and may themselves reveal the answer.
     ...(q && session.status !== 'passed' ? { question: { id: q.id, prompt: q.prompt, choices: q.choices } } : {}),
     ...(session.lastFeedback ? { feedback: session.lastFeedback } : {}),
-    ...(session.status === 'passed' ? { expiresAt: session.expiresAt } : {}),
+    ...(session.status === 'passed' ? { expiresAt: session.expiresAt, ...(session.noQuestionReason ? { noQuestionReason: session.noQuestionReason } : {}) } : {}),
   };
 }
 
@@ -228,6 +242,12 @@ export function createSessionStore({ env = process.env, generate = generateAsses
       if (validReceipt(session,config)) return publicSession(session);
       await limitPendingQuestions(session, config);
       signal?.throwIfAborted();
+      if (!session.questions.length && session.status === 'pending' && documentationOnly(session.snapshot.files)) {
+        await validate(session.snapshot, config);
+        passWithoutQuestions(session, config, 'Documentation-only change.');
+        await save(session);
+        return publicSession(session);
+      }
       if (!session.questions.length) {
         const reserve = questionLimit(config.level, session.route.tier);
         const limit = callLimit(session);
@@ -267,8 +287,19 @@ export function createSessionStore({ env = process.env, generate = generateAsses
           },
         };
         try {
-          const result = await withUsageMeter(meterFor(session), () => generate(session.snapshot,evaluatorConfig(config,session.route),{beforeCall,signal,maxReviewerCalls,reviewerCheckpoint,onProgress,env}));
+          const result = await withUsageMeter(meterFor(session), () => withUsagePurpose('review', () => generate(session.snapshot,evaluatorConfig(config,session.route),{beforeCall,signal,maxReviewerCalls,reviewerCheckpoint,onProgress,env})));
           signal?.throwIfAborted();
+          // The reviewer, confirmed by its audit, may decide a change needs no questions:
+          // a small one with nothing to understand, or, when the person has stated
+          // preferences, one entirely in an area they skip.
+          if (Array.isArray(result.questions) && !result.questions.length && (session.route.tier === 'small' || hasPreferences(session.snapshot)) && typeof result.noQuestionReason === 'string' && result.noQuestionReason.trim()) {
+            await validate(session.snapshot, config);
+            signal?.throwIfAborted();
+            if (result.review) session.review = result.review;
+            passWithoutQuestions(session, config, result.noQuestionReason.trim().slice(0, 300));
+            await save(session);
+            return publicSession(session);
+          }
           if (!Array.isArray(result.questions) || !result.questions.length) throw new Error('Evaluator returned no grounded questions. The check remains pending.');
           if (result.questions.length > reserve) throw new Error('Evaluator exceeded the question limit. The check remains pending.');
           await validate(session.snapshot, config);
@@ -319,7 +350,7 @@ export function createSessionStore({ env = process.env, generate = generateAsses
       const beforeCall = async () => { signal?.throwIfAborted(); await budget(session); signal?.throwIfAborted(); };
       let result;
       try {
-        result = await withUsageMeter(meterFor(session), () => grade({snapshot:session.snapshot,question,answer:text.trim(),config:evaluatorConfig(config,session.route),review:session.review,dispute,beforeCall,signal,env}));
+        result = await withUsageMeter(meterFor(session), () => withUsagePurpose('grading', () => grade({snapshot:session.snapshot,question,answer:text.trim(),config:evaluatorConfig(config,session.route),review:session.review,dispute,learn,beforeCall,signal,env})));
       } catch (error) {
         if (learn || signal?.aborted || error?.name === 'AbortError') throw error;
         throw withRecoveryMessage(error, `${error.message} Your ${dispute ? 'dispute reason' : 'answer'} was saved and is offered again when you resume this question.`);
@@ -331,7 +362,13 @@ export function createSessionStore({ env = process.env, generate = generateAsses
       // model usage, and leaves the same question available to the human.
       const beforeAnswer = structuredClone(session);
       delete session.draft;
-      session.attempts.push({questionId:question.id,answer:text.trim(),verdict:result.verdict,feedback:result.feedback,at:now()});
+      session.attempts.push({questionId:question.id,index:session.index,kind:dispute?'dispute':learn?'learn':'answer',prompt:question.prompt,answer:text.trim(),verdict:result.verdict,feedback:result.feedback,at:now()});
+      // Score each question once, on its first real grade. A dispute or an
+      // ambiguous grade leaves it unscored; asking for an explanation counts as a miss.
+      const scoredIndex = session.index;
+      const scoreThis = !dispute && result.verdict !== 'ambiguous' && !(session.scored || []).includes(scoredIndex);
+      if (scoreThis) session.scored = [...(session.scored || []), scoredIndex];
+      // The grader is asked to skip feedback on a correct answer; if it wrote some anyway, show it.
       session.lastFeedback = result.feedback;
       if (result.verdict === 'correct') {
         session.index += 1;
@@ -343,7 +380,11 @@ export function createSessionStore({ env = process.env, generate = generateAsses
         }
       } else if (result.followUp) {
         if (result.followUp.prompt.trim() === question.prompt.trim()) throw new Error('The evaluator repeated the question. Retry; no concept was marked complete.');
-        session.questions[session.index] = result.followUp;
+        // Keep IDs unique across the check, so nothing keyed by question ID can confuse two questions.
+        const taken = new Set(session.questions.filter((_, index) => index !== session.index).map(item => item.id));
+        let followUp = result.followUp;
+        for (let n = 2; taken.has(followUp.id); n++) followUp = { ...result.followUp, id: `${result.followUp.id}-${n}` };
+        session.questions[session.index] = followUp;
       } else if (result.verdict === 'incorrect' || learn) {
         throw new Error('The evaluator did not provide a transfer question. The concept remains pending.');
       }
@@ -362,6 +403,8 @@ export function createSessionStore({ env = process.env, generate = generateAsses
         }
         throw error;
       }
+      if (scoreThis) await recordAnswer({ repoRoot: session.snapshot.repoRoot, correct: result.verdict === 'correct' && !learn, env });
+      if (session.status === 'passed') await recordCheck({ repoRoot: session.snapshot.repoRoot, outcome: 'completed', env });
       return {...publicSession(session), verdict:result.verdict};
     });
   }
@@ -381,6 +424,7 @@ export function createSessionStore({ env = process.env, generate = generateAsses
       if (session.status === 'passed') return publicSession(session);
       session.status = 'skipped'; session.updatedAt = now();
       await save(session);
+      await recordCheck({ repoRoot: session.snapshot.repoRoot, outcome: 'skipped', env });
       return publicSession(session);
     });
   }
@@ -393,5 +437,46 @@ export function createSessionStore({ env = process.env, generate = generateAsses
       return true;
     });
   }
-  return {ensure,approved,prepare,start,retryReview,refreshBudget,answer,pending,read,skip,discard,public:publicSession};
+  /**
+   * Move one check to a coding agent's signed-in plan, for example after an
+   * OpenRouter rate limit. Only this check changes; saved routes stay as they
+   * are. Unanswered investigation is dropped because its conversation belongs
+   * to the previous transport; existing questions and progress are kept.
+   */
+  // Moves an unfinished check to another reviewer: a plan's preset model when
+  // only a provider is given (rate-limit recovery), or the exact model picked.
+  async function switchRoute(id, config, provider, { signal, model: picked } = {}) {
+    if (!['claude', 'codex', 'openrouter', 'openai'].includes(provider)) throw new Error('Unknown reviewer provider.');
+    if (picked === undefined && !['claude', 'codex'].includes(provider)) throw new Error('Only Claude Code or Codex can take over a check on your plan.');
+    return withLock(id, env, async () => {
+      signal?.throwIfAborted();
+      const session = await read(id);
+      if (session.policy !== policyHash(config)) throw new Error('Sphinx settings changed. Start a fresh check.');
+      if (!['pending', 'active'].includes(session.status)) throw new Error('Only an unfinished check can switch models.');
+      const preset = REVIEWER_PRESETS.find(item => item.id === `${provider}-economy`);
+      const model = picked ?? preset?.models[session.route.tier]?.model ?? null;
+      const at = now();
+      session.routeChanges = [...(session.routeChanges || []), { at, calls: session.calls, from: { provider: session.route.provider, model: session.route.model }, to: { provider, model } }];
+      session.route = { ...session.route, provider, model };
+      if (!session.questions.length) delete session.reviewerCheckpoint;
+      session.updatedAt = at;
+      await save(session);
+      return publicSession(session);
+    });
+  }
+  /** Pass a documentation-only change before any page or model is involved. */
+  async function passTrivial(id, config, snapshot) {
+    // Decide from the file list without the lock; a check that background
+    // preparation is holding is simply not passed here and follows the normal flow.
+    if (snapshot && !documentationOnly(snapshot.files)) return false;
+    return withLock(id, env, async () => {
+      const session = await read(id);
+      if (session.status !== 'pending' || session.questions.length || !documentationOnly(session.snapshot.files)) return false;
+      await validate(session.snapshot, config);
+      passWithoutQuestions(session, config, 'Documentation-only change.');
+      await save(session);
+      return true;
+    }).catch(error => { if (error.code === 'SPHINX_SESSION_BUSY') return false; throw error; });
+  }
+  return {passTrivial,ensure,approved,prepare,start,retryReview,refreshBudget,answer,pending,read,skip,discard,switchRoute,public:publicSession};
 }

@@ -49,7 +49,7 @@ export const REVIEWER_PRESETS = Object.freeze([
     sources: ['https://openrouter.ai/deepseek/deepseek-v3.2'],
   },
   {
-    id: 'openrouter-free', label: 'OpenRouter · free router (best effort)',
+    id: 'openrouter-free', label: 'OpenRouter · free router (slow, best effort)',
     description: 'Explicit opt-in to openrouter/free. Requires a key. Model selection varies by request, and tool-call failures or rate limits can interrupt checks. Sphinx does not switch to a paid route automatically.',
     models: {
       small: { provider: 'openrouter', model: 'openrouter/free' },

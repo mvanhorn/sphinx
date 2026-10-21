@@ -30,3 +30,20 @@ test('a failed plan-billed call explains a missing plan sign-in instead of a gen
     assert.equal(calls[0].env[provider === 'claude' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY'], undefined, 'The reviewer call itself never sees an API key');
   }
 });
+
+test('Codex receives a strict schema with every property required, and optional nulls are removed from its answer', async () => {
+  const { strictSchema, dropOptionalNulls } = await import('../src/evaluator.js');
+  const schema = { type: 'object', additionalProperties: false, required: ['action'], properties: { action: { type: 'string' }, evidenceIds: { type: 'array', items: { type: 'string' } }, nested: { type: 'object', additionalProperties: false, required: [], properties: { note: { type: 'string' } } } } };
+  const strict = strictSchema(schema);
+  assert.deepEqual(strict.required, ['action', 'evidenceIds', 'nested']);
+  assert.deepEqual(strict.properties.evidenceIds.anyOf[1], { type: 'null' });
+  assert.deepEqual(strict.properties.nested.anyOf[0].required, ['note']);
+  assert.deepEqual(schema.required, ['action'], 'The original schema is not mutated');
+  assert.deepEqual(dropOptionalNulls({ action: 'finish', evidenceIds: null, nested: null }, schema), { action: 'finish' });
+});
+
+test('a failed Codex run reports what Codex said instead of only its exit code', async () => {
+  const stdout = '{"type":"error","message":"{\\"error\\":{\\"message\\":\\"Invalid schema for response_format: Missing evidenceIds.\\"}}"}\n';
+  const runner = async request => request.args[0] === 'exec' ? { exitCode: 1, stdout, stderr: '' } : { exitCode: 0, stdout: 'Logged in using ChatGPT', stderr: '' };
+  await assert.rejects(createEvaluator({ runner, env: {} }).runModel({ prompt: 'p', schema: { type: 'object' }, config: { provider: 'codex', timeoutSeconds: 5 } }), /Codex reported: Invalid schema for response_format: Missing evidenceIds\./);
+});

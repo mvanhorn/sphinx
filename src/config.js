@@ -9,12 +9,14 @@ export const PROVIDERS = Object.freeze(['openrouter', 'codex', 'claude', 'openai
 
 export const DEFAULT_CONFIG = {
   version: 1, enabled: true, provider: 'openrouter', model: 'openrouter/free',
-  level: 'standard', mode: 'block', events: ['pre-push'],
+  level: 'standard', distance: 'mixed', audit: 'large', mode: 'block', interface: 'auto', events: ['pre-push'],
   branches: ['main', 'master'], remotes: ['*'], exclude: [],
   maxContextBytes: 100000, timeoutSeconds: 180, receiptHours: 24,
   maxModelCalls: null, maxOutputTokens: 4096, allowPaid: false, cliBilling: 'plan',
   agentMaxTurns: null, toolResultBytes: 16000,
-  backgroundPreparation: true, preparationDebounceMs: 1500,
+  backgroundPreparation: true, preparationDebounceMs: 1500, workingContext: true,
+  // GitHub stamps never affect a check; see src/github.js.
+  github: { status: true, comment: false, answers: false },
   models: {
     small: { provider: 'openrouter', model: 'openrouter/free' },
     medium: { provider: 'openrouter', model: 'openrouter/free' },
@@ -25,6 +27,13 @@ export const DEFAULT_CONFIG = {
     riskPatterns: ['auth', 'permission', 'migration', 'billing', 'payment', 'crypto', 'security', 'terraform'],
   },
 };
+
+/** Understanding distance: how close to the code questions get. One wording everywhere. */
+export const DISTANCES = Object.freeze({
+  high: { label: 'High level', description: 'High-level design: what the change does, how it fits into the system, and what it affects.' },
+  mixed: { label: 'Mixed', description: 'A bit of both: some high-level design questions, some low-level implementation details.' },
+  low: { label: 'Low level', description: 'Low-level implementation details: the specific logic, conditions, and edge cases.' },
+});
 
 export function getPaths(env = process.env) {
   const userHome = path.resolve(env.SPHINX_USER_HOME || homedir());
@@ -72,8 +81,8 @@ export function validateConfig(config) {
   const allowed = new Set(Object.keys(DEFAULT_CONFIG));
   for (const key of Object.keys(config)) if (!allowed.has(key)) fail(`unknown setting ${key}`);
   if (config.version !== 1) fail('version must be 1');
-  for (const key of ['enabled', 'allowPaid', 'backgroundPreparation']) if (typeof config[key] !== 'boolean') fail(`${key} must be boolean`);
-  for (const [key, values] of Object.entries({ provider: PROVIDERS, level: ['relaxed','standard','thorough'], mode: ['block'], cliBilling: ['plan','api'] })) {
+  for (const key of ['enabled', 'allowPaid', 'backgroundPreparation', 'workingContext']) if (typeof config[key] !== 'boolean') fail(`${key} must be boolean`);
+  for (const [key, values] of Object.entries({ provider: PROVIDERS, level: ['relaxed','standard','thorough'], distance: ['high','mixed','low'], audit: ['large','all'], interface: ['auto','browser','terminal'], mode: ['block'], cliBilling: ['plan','api'] })) {
     if (key === 'mode' && config.mode === 'advisory') fail('mode "advisory" was removed. Remove mode from your configuration; use sphinx yolo to bypass checks when urgent');
     if (!values.includes(config[key])) fail(`${key} must be ${values.join(', ')}`);
   }
@@ -96,6 +105,8 @@ export function validateConfig(config) {
     if (Object.keys(route).some(k => !['provider','model'].includes(k))) fail(`unexpected field in models.${tier}`);
   }
   if (Object.keys(config.models).some(k => !['small','medium','large'].includes(k))) fail('unknown model tier');
+  if (!config.github || typeof config.github !== 'object' || Array.isArray(config.github)) fail('github must be an object');
+  for (const key of Object.keys(config.github)) if (!Object.hasOwn(DEFAULT_CONFIG.github, key) || typeof config.github[key] !== 'boolean') fail(`github.${key} must be one of status, comment, answers set to true or false`);
   if (!config.routing || typeof config.routing !== 'object') fail('routing is required');
   for (const key of Object.keys(config.routing)) if (!Object.hasOwn(DEFAULT_CONFIG.routing,key)) fail(`unknown routing setting ${key}`);
   for (const k of ['smallMaxLines','smallMaxFiles','largeMinLines','largeMinFiles']) {
@@ -107,10 +118,10 @@ export function validateConfig(config) {
 }
 
 function merged(base, overrides) {
-  return { ...base, ...overrides, models: { ...base.models, ...overrides?.models }, routing: { ...base.routing, ...overrides?.routing } };
+  return { ...base, ...overrides, models: { ...base.models, ...overrides?.models }, routing: { ...base.routing, ...overrides?.routing }, github: { ...base.github, ...overrides?.github } };
 }
 
-export const REPOSITORY_CONFIG_KEYS = Object.freeze(['version','enabled','level','mode','events','branches','remotes','exclude','backgroundPreparation']);
+export const REPOSITORY_CONFIG_KEYS = Object.freeze(['version','enabled','level','distance','mode','events','branches','remotes','exclude','backgroundPreparation','github']);
 
 export function validateRepositoryConfig(local, { env = process.env, source = '.sphinxconfig' } = {}) {
   if (!local || typeof local !== 'object' || Array.isArray(local)
@@ -122,7 +133,7 @@ export function validateRepositoryConfig(local, { env = process.env, source = '.
       throw new Error(`Repository ${source} cannot set ${key}; configure model routes and budgets in ${getPaths(env).config}.`);
     }
   }
-  validateConfig({ ...structuredClone(DEFAULT_CONFIG), ...local });
+  validateConfig(merged(structuredClone(DEFAULT_CONFIG), local));
   return local;
 }
 
@@ -176,13 +187,14 @@ export function stableStringify(value) {
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
   return JSON.stringify(value);
 }
-export function policyHash(config) {
+export function policyHash({ github, interface: _interface, ...config }) {
+  // GitHub stamps and where the questions appear are not part of the check.
   // The call ceiling controls spending, not what the human must understand.
   // Normalize it independently of DEFAULT_CONFIG so allowance edits preserve
   // checkpoint identity within the same assessment contract.
   // Version the contract when assessment semantics change: older questions and
   // receipts must not stand in for an assessment under the new requirements.
-  return createHash('sha256').update(stableStringify({ ...config, maxModelCalls: 10, agentMaxTurns: 8, cliBilling: 'plan', assessmentContract: 3 })).digest('hex');
+  return createHash('sha256').update(stableStringify({ ...config, maxModelCalls: 10, agentMaxTurns: 8, cliBilling: 'plan', workingContext: true, assessmentContract: 3 })).digest('hex');
 }
 
 const isRecord = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value);

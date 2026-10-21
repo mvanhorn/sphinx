@@ -67,7 +67,7 @@ async function fixture(t, phase) {
   await writeFile(setup, `import { DEFAULT_CONFIG,saveConfig } from ${JSON.stringify(modulePath('config'))};
 import { pushSnapshots } from ${JSON.stringify(modulePath('git'))};
 import { createSessionStore } from ${JSON.stringify(modulePath('sessions'))};
-const config={...structuredClone(DEFAULT_CONFIG),provider:'claude',model:null,backgroundPreparation:false,models:Object.fromEntries(['small','medium','large'].map(tier=>[tier,{provider:'claude',model:null}]))};
+const config={...structuredClone(DEFAULT_CONFIG),audit:'all',provider:'claude',model:null,backgroundPreparation:false,models:Object.fromEntries(['small','medium','large'].map(tier=>[tier,{provider:'claude',model:null}]))};
 await saveConfig(config);
 const [snapshot]=await pushSnapshots({cwd:process.cwd(),remote:'origin',remoteUrl:'https://example.invalid/test.git',input:process.argv[2],config});
 const store=createSessionStore();await store.ensure(snapshot,config);
@@ -115,7 +115,7 @@ test('SIGINT during the first interactive review cancels its subprocess and reco
 test('cancellation while the final grade is in flight cannot save a late correct result or release waiting Git', { timeout: 45000 }, async t => {
   for (const cancel of ['SIGINT', 'EOF']) await t.test(cancel, async t => {
     const f = await fixture(t, 'grade');
-    await f.until(() => f.output().includes('Your answer:'));
+    await f.until(() => f.output().includes('› '));
     f.child.stdin.write('No. The existing ID is checked before insertion.\n');
     await f.ready();
     if (cancel === 'EOF') f.child.stdin.end(); else f.child.kill('SIGINT');
