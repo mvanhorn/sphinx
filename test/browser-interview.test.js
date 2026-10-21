@@ -217,6 +217,16 @@ test('Git cancellation during review aborts work, releases the reservation, and 
   assert.equal((await f.store.read(f.snapshot.id)).questions.length, 0);
 });
 
+test('a check Git discarded as stale tells the page why instead of reporting a pause', async t => {
+  const f = await fixture(t), done = f.present(); await f.waitFor('question');
+  const reason = Object.assign(new Error('Sphinx settings changed while Git was waiting, so this check was discarded.'), { code: 'SPHINX_STALE' });
+  f.controller.abort(reason);
+  assert.equal((await done).status, 'pending');
+  assert.equal(f.interview.state.phase, 'error');
+  assert.equal(f.interview.state.error, reason.message);
+  assert.equal(await f.store.approved(f.snapshot, f.config), false);
+});
+
 test('CI and evaluator subprocesses never start a browser or model', async () => {
   for (const env of [{ CI: '1' }, { SPHINX_EVALUATOR: '1' }]) {
     const interview = createBrowserInterview({ env, openBrowser: () => assert.fail('must not open'), reserve: () => assert.fail('must not reserve') });

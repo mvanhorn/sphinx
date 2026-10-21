@@ -165,6 +165,22 @@ test('source and effective policy changes while answering invalidate the origina
   });
 });
 
+test('a settings change while Git waits releases the push promptly with the next step', { timeout: 30000 }, async t => {
+  for (const mode of ['global', 'repository']) await t.test(mode, async t => {
+    const f = await fixture(t), child = f.start('push', 'origin', 'main');
+    await f.ready(child);
+    // The remediation a failed preparation advises: change settings, never answer.
+    if (mode === 'global') await saveConfig({ ...f.config, maxOutputTokens: 16384 }, f.env);
+    else await writeFile(path.join(f.repo, '.sphinxconfig'), JSON.stringify({ level: 'thorough' }));
+    const changed = Date.now(), result = await child.finished;
+    assert.ok(Date.now() - changed < 10000, 'the waiting push must not outlive a discarded check');
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Sphinx settings changed while Git was waiting, so this check was discarded\. This Git operation was stopped; run git push again/);
+    await assert.rejects(f.bare('rev-parse', '--verify', 'refs/heads/main'));
+    assert.deepEqual(await f.pending(), []);
+  });
+});
+
 test('one push waits for every protected destination before any ref is sent', { timeout: 15000 }, async t => {
   const f = await fixture(t); await f.setup('branch', 'master');
   const child = f.start('push', 'origin', 'main', 'master');

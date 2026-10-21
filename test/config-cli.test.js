@@ -125,6 +125,10 @@ test('output-token allowance is explicit, bounded, and preserves model routes an
     assert.equal(await readFile(f.configPath, 'utf8'), original);
   }
   for (const value of ['512', '16384']) assert.equal(JSON.parse(f.ok(['config', '--max-output-tokens', value, '--json'])).config.maxOutputTokens, Number(value));
+  // Changing assessment policy tells the human what happens to a waiting Git operation.
+  assert.match(f.ok(['config', '--max-output-tokens', '8192']).replace(/\s+/g, ' '), /Checks started under the previous settings no longer apply\. A Git operation waiting on one stops within a few seconds/);
+  // The call ceiling is not part of the assessment policy, so no warning is shown.
+  assert.doesNotMatch(f.ok(['config', '--max-model-calls', '50']), /no longer apply/);
   await f.absent(path.join(f.state, 'sessions'));
   await f.absent(f.env.GIT_CONFIG_GLOBAL);
 });

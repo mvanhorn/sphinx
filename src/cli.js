@@ -522,6 +522,7 @@ export async function main(argv) {
         terminal.note('Changing evaluator routes applies to fresh checkpoints. Existing checkpoints remain bound to their original assessment policy.');
       }
       terminal.note(result.path);
+      if (policyHash(current) !== policyHash(config)) terminal.note('Checks started under the previous settings no longer apply. A Git operation waiting on one stops within a few seconds; run it again to start a fresh check.');
       if (Object.values(config.models).some(route => route.provider === 'openai') && !(await openAIEndpoint().catch(() => null))) terminal.warning('No OpenAI-compatible endpoint is saved yet. Run sphinx auth --provider openai before the next check.');
       terminal.paragraph(`Model calls: ${modelLimitText(maxModelCalls)}. Review, compaction, grading, learning follow-ups, and failed requests stay counted. Saving configuration makes no model request.`);
       terminal.note(`Review planning targets: ${reviewCapsText(config)} calls. Explicit request caps, context limits, and deadlines still apply.`);

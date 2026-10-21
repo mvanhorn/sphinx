@@ -320,7 +320,9 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
     } catch (error) {
       settle('not-graded');
       if (skip) return skipped();
-      publish({ ...publicFields(state), repoRoot: request.repoRoot, phase: localSignal.aborted ? 'paused' : 'error', message: localSignal.aborted ? pauseMessage() : 'The check could not finish. Saved progress and completed checkpoints are retained.', ...(localSignal.aborted ? {} : { error: error.message }) });
+      // The waiting Git operation discarded this check because it no longer applies.
+      if (localSignal.reason?.code === 'SPHINX_STALE') publish({ ...publicFields(state), repoRoot: request.repoRoot, phase: 'error', message: 'This check no longer applies.', error: localSignal.reason.message });
+      else publish({ ...publicFields(state), repoRoot: request.repoRoot, phase: localSignal.aborted ? 'paused' : 'error', message: localSignal.aborted ? pauseMessage() : 'The check could not finish. Saved progress and completed checkpoints are retained.', ...(localSignal.aborted ? {} : { error: error.message }) });
       return { status: 'pending', id: request.id };
     } finally {
       clearTimeout(timer); requestSignal?.removeEventListener('abort', cancel); resolver?.reject(cancelled()); resolver = undefined;

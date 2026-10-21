@@ -27,7 +27,7 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
   store: providedStore, readConfig = loadConfig, snapshotsFor: collectSnapshots = snapshotsFor,
   revalidate = revalidateSnapshot, present, readYolo = yoloStatus, logOverride = recordOverride,
   queue = queuePresentation, claim = claimPresentation, listRequests = listPresentations,
-  output = line => process.stderr.write(`${line}\n`),
+  output = line => process.stderr.write(`${line}\n`), watchMs = 1000,
 } = {}) {
   if (env.SPHINX_EVALUATOR === '1') return 0;
   signal?.throwIfAborted();
@@ -35,10 +35,15 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
   const config = await readConfig(repo.root, env);
   const snapshots = await collectSnapshots({ event, args, input, cwd, config, env });
   if (!snapshots.length) return 0;
+  // Names what invalidated a snapshot: 'settings', 'source', or null if it still applies.
+  const staleness = async (snapshot, expected) => {
+    const current = await readConfig(snapshot.repoRoot, env);
+    if (policyHash(current) !== policyHash(expected)) return 'settings';
+    return await revalidate(snapshot, current, { env }) ? null : 'source';
+  };
   const validate = async (snapshot, expected) => {
     signal?.throwIfAborted();
-    const current = await readConfig(snapshot.repoRoot, env);
-    if (policyHash(current) !== policyHash(expected) || !(await revalidate(snapshot, current, { env }))) {
+    if (await staleness(snapshot, expected)) {
       throw new Error('The code, project context, or policy changed while Git was waiting. This operation was stopped; start a new Git operation for the updated change.');
     }
     signal?.throwIfAborted();
@@ -62,6 +67,30 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
 
   const requests = [], skipped = new Set();
   const browser = present ? null : createBrowserInterview({ env, signal, output });
+  // A settings or source change makes the waiting checks inapplicable (sphinx
+  // pending stops listing them). Release Git promptly instead of leaving it
+  // blocked on a questionnaire that can no longer approve this operation.
+  const watcher = new AbortController();
+  const waitSignal = signal ? AbortSignal.any([signal, watcher.signal]) : watcher.signal;
+  const retry = event === 'pre-commit' ? 'git commit' : 'git push';
+  let checking = false;
+  const watch = setInterval(async () => {
+    if (checking || watcher.signal.aborted) return;
+    checking = true;
+    try {
+      for (const snapshot of snapshots) {
+        if (skipped.has(snapshot.id)) continue;
+        const reason = await staleness(snapshot, config);
+        if (!reason) continue;
+        watcher.abort(Object.assign(new Error(reason === 'settings'
+          ? `Sphinx settings changed while Git was waiting, so this check was discarded. This Git operation was stopped; run ${retry} again to start a fresh check.`
+          : `The code or project context changed while Git was waiting, so this check was discarded. This Git operation was stopped; run ${retry} again for the updated change.`), { code: 'SPHINX_STALE' }));
+        break;
+      }
+    } catch {} // A transient read failure is retried on the next tick; the final validation still applies.
+    finally { checking = false; }
+  }, watchMs);
+  const discarded = () => watcher.signal.aborted && !signal?.aborted;
   try {
     // These requests belong to the waiting hook, not a post-tool callback.
     // Mark the whole batch before launching so sibling tools cannot open forms.
@@ -76,7 +105,10 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
     const interviewEnv = interviewEnvironment(cwd, env);
     for (let index = 0; index < requests.length; index++) {
       signal?.throwIfAborted();
-      const result = await (present || browser.present)({ request: requests[index], env: interviewEnv, signal });
+      const result = await (present || browser.present)({ request: requests[index], env: interviewEnv, signal: waitSignal }).catch(error => {
+        if (!discarded()) throw error;
+      });
+      if (discarded()) { output(`Sphinx: ${watcher.signal.reason.message}`); return 1; }
       signal?.throwIfAborted();
       if (result?.status === 'unavailable') {
         // Native callbacks only run after Git exits. Keep that explicit fallback
@@ -109,6 +141,7 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
     if (requests.length) output('Sphinx: understanding check complete. Continuing this Git operation.');
     return 0;
   } finally {
+    clearInterval(watch);
     // A paused or cancelled batch must not reopen from an after-tool callback.
     for (const request of requests) await claim(request, { env });
     await browser?.close();
