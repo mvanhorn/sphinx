@@ -9,7 +9,8 @@ import { DEFAULT_CONFIG, saveOpenRouterKey } from '../src/config.js';
 const apiKey = 'test-only-private-openrouter-key';
 const schema = { type: 'object', properties: { questions: { type: 'array' } }, required: ['questions'], additionalProperties: false };
 const result = { questions: [] };
-const defaults = { prompt: 'Assess only the supplied snapshot.', schema, config: structuredClone(DEFAULT_CONFIG), env: { OPENROUTER_API_KEY: apiKey } };
+// Retry backoff is recorded rather than slept; retry tests inspect the waits.
+const defaults = { prompt: 'Assess only the supplied snapshot.', schema, config: structuredClone(DEFAULT_CONFIG), env: { OPENROUTER_API_KEY: apiKey }, sleep: async () => {} };
 const success = (content = JSON.stringify(result), finish_reason = 'stop') => Response.json({ choices: [{ finish_reason, message: { content } }] });
 
 test('default OpenRouter request requires zero-priced structured output and enforces the token budget', async () => {
@@ -73,19 +74,71 @@ test('missing authentication fails before a request and an isolated saved key is
 });
 
 test('HTTP errors remain actionable without exposing authentication or the provider response body', async () => {
-  for (const [status, message] of [[401, /sphinx auth/], [429, /Provider or account rate limit.*switch this check to your Claude Code or Codex plan/], [400, /structured-output/], [402, /insufficient credits/], [503, /unavailable/], [502, /Request failed/]]) {
+  for (const [status, message, attempts] of [[401, /sphinx auth/, 1], [429, /Provider or account rate limit.*switch this check to your Claude Code or Codex plan/, 4], [400, /structured-output/, 1], [402, /insufficient credits/, 1], [503, /unavailable/, 4], [502, /Request failed/, 4], [404, /No compatible provider/, 4]]) {
     let calls = 0;
     await assert.rejects(callOpenRouter({ ...defaults, fetchImpl: async () => { calls++; return new Response(`server diagnostic ${apiKey}`, { status }); } }), error => {
       assert.match(error.message, message);
+      assert.match(error.message, attempts === 1 ? /did not retry automatically/ : /after 4 attempts; Sphinx retried with backoff\./);
       assert.ok(!error.message.includes(apiKey));
       return true;
     });
-    assert.equal(calls, 1, 'No automatic retry or paid fallback');
+    assert.equal(calls, attempts, 'Only transient failures retry, and never with a paid fallback');
   }
 });
 
-test('HTTP rate-limit and availability errors expose a bounded Retry-After delay without retrying', async () => {
-  for (const [status, header, seconds] of [[429, '60', 60], [503, ' 1 ', 1], [429, '86400', 86400], [503, '0', 0]]) {
+test('a transient 404 or 429 is retried with backoff and completes without user intervention', async () => {
+  for (const status of [404, 429]) {
+    let calls = 0, charges = 0;
+    const waits = [], bodies = [];
+    const actual = await callOpenRouter({ ...defaults, beforeCall: async () => { charges++; }, sleep: async ms => { waits.push(ms); },
+      fetchImpl: async (_url, init) => { bodies.push(init.body); return ++calls === 1 ? Response.json({ error: { code: status, message: apiKey } }, { status }) : success(); } });
+    assert.deepEqual(actual, result);
+    assert.equal(calls, 2); assert.equal(charges, 2, 'Every attempt counts as a model call');
+    assert.deepEqual(waits, [5000]);
+    assert.equal(bodies[0], bodies[1], 'The retry repeats the same request on the same route');
+  }
+});
+
+test('retries honor Retry-After, stop when the provider asks for a long wait, and stop at the call cap', async () => {
+  let waits = [], calls = 0;
+  const limited = (header, then = success) => async () => ++calls === 1 ? new Response('', { status: 429, headers: { 'Retry-After': header } }) : then();
+  await callOpenRouter({ ...defaults, sleep: async ms => { waits.push(ms); }, fetchImpl: limited('20') });
+  assert.deepEqual(waits, [20000]); assert.equal(calls, 2);
+
+  waits = []; calls = 0;
+  await assert.rejects(callOpenRouter({ ...defaults, sleep: async ms => { waits.push(ms); }, fetchImpl: limited('3600') }), error => {
+    assert.equal(error.retryAfterSeconds, 3600);
+    assert.match(error.message, /did not retry automatically/);
+    return true;
+  });
+  assert.deepEqual(waits, []); assert.equal(calls, 1);
+
+  waits = []; calls = 0;
+  let charges = 0;
+  const capped = async () => { if (++charges > 2) throw new Error('Assessment call limit (2) reached. No additional model request was made.'); };
+  await assert.rejects(callOpenRouter({ ...defaults, beforeCall: capped, sleep: async ms => { waits.push(ms); }, fetchImpl: async () => { calls++; return new Response('', { status: 429 }); } }), /Assessment call limit \(2\) reached/);
+  assert.equal(calls, 2); assert.deepEqual(waits, [5000, 15000]);
+});
+
+test('cancellation during retry backoff stops without another request', async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const reason = new DOMException('Paused', 'AbortError');
+  await assert.rejects(callOpenRouter({ ...defaults, signal: controller.signal,
+    sleep: async () => { controller.abort(reason); throw new DOMException('aborted', 'AbortError'); },
+    fetchImpl: async () => { calls++; return new Response('', { status: 503 }); } }), error => error === reason);
+  assert.equal(calls, 1);
+});
+
+test('custom OpenAI-compatible endpoints do not retry a 404, which means a wrong URL or model', async () => {
+  let calls = 0;
+  const env = { SPHINX_OPENAI_BASE_URL: 'https://llm.example.test/v1', SPHINX_OPENAI_API_KEY: apiKey };
+  await assert.rejects(callOpenRouter({ ...defaults, env, config: { ...defaults.config, provider: 'openai', model: 'local-model' }, fetchImpl: async () => { calls++; return new Response('', { status: 404 }); } }), /HTTP 404/);
+  assert.equal(calls, 1);
+});
+
+test('HTTP rate-limit and availability errors expose a bounded Retry-After delay', async () => {
+  for (const [status, header, seconds, attempts] of [[429, '60', 60, 4], [503, ' 1 ', 1, 4], [429, '86400', 86400, 1], [503, '0', 0, 4]]) {
     let calls = 0, charges = 0;
     await assert.rejects(callOpenRouter({ ...defaults, beforeCall: async () => { charges++; }, fetchImpl: async () => {
       calls++;
@@ -94,11 +147,11 @@ test('HTTP rate-limit and availability errors expose a bounded Retry-After delay
       assert.ok(error instanceof OpenRouterError); assert.equal(error.status, status);
       assert.equal(error.retryAfterSeconds, seconds);
       assert.match(error.message, seconds === 0 ? /retry delay has elapsed/ : new RegExp(`Wait at least ${seconds} second`));
-      assert.match(error.message, /did not retry automatically/);
+      assert.match(error.message, attempts === 1 ? /did not retry automatically/ : /after 4 attempts/);
       assert.ok(!JSON.stringify(error).includes(apiKey)); assert.ok(!error.message.includes(apiKey));
       return true;
     });
-    assert.equal(calls, 1); assert.equal(charges, 1);
+    assert.equal(calls, attempts); assert.equal(charges, attempts);
   }
 });
 
@@ -231,15 +284,15 @@ test('a failed HTTP response retains status advice and Retry-After when its body
     assert.ok(!error.message.includes(apiKey)); assert.equal(error.cause, undefined);
     return true;
   });
-  assert.equal(calls, 1); assert.equal(charges, 1);
+  assert.equal(calls, 4); assert.equal(charges, 4);
 });
 
 test('typed provider failures expose only known categories and numeric status, including HTTP error bodies', async () => {
   const diagnostic = { code: 502, message: apiKey, metadata: { error_type: 'provider_overloaded', provider_name: apiKey, provider_code: apiKey, raw: apiKey } };
-  for (const response of [
-    () => Response.json({ id: apiKey, error: diagnostic }),
-    () => Response.json({ choices: [{ finish_reason: 'error', error: diagnostic, message: { content: apiKey } }] }),
-    () => Response.json({ error: diagnostic }, { status: 502 }),
+  for (const [response, attempts] of [
+    [() => Response.json({ id: apiKey, error: diagnostic }), 1],
+    [() => Response.json({ choices: [{ finish_reason: 'error', error: diagnostic, message: { content: apiKey } }] }), 1],
+    [() => Response.json({ error: diagnostic }, { status: 502 }), 4],
   ]) {
     let charges = 0, requests = 0;
     await assert.rejects(callOpenRouter({ ...defaults, beforeCall: async () => { charges++; }, fetchImpl: async () => { requests++; return response(); } }), error => {
@@ -254,7 +307,8 @@ test('typed provider failures expose only known categories and numeric status, i
       assert.equal(error.cause, undefined);
       return true;
     });
-    assert.equal(charges, 1); assert.equal(requests, 1);
+    // Only the failed HTTP status is retried; a 200 response already generated output.
+    assert.equal(charges, attempts); assert.equal(requests, attempts);
   }
 });
 

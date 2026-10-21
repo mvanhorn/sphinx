@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readStats, scoreSummary } from './stats.js';
 import { prepareInteractiveCheck } from './check-recovery.js';
+import { savedDraft } from './sessions.js';
 import { VERSION } from './version.js';
 import { wrapText, stripAnsi } from './terminal.js';
 
@@ -123,7 +124,7 @@ export async function runTerminalCheck({ store, session, config, ask, terminal: 
     return finish(terminal, { waitingGit });
   }
 
-  let shownId = null, shownNumber = 0;
+  let shownId = null, shownNumber = 0, shownDraft = null;
   while (state.status !== 'passed') {
     if (state.question && state.question.id !== shownId) {
       const number = state.progress.completed + 1;
@@ -131,7 +132,15 @@ export async function runTerminalCheck({ store, session, config, ask, terminal: 
       commandsLine(terminal, { waitingGit });
       shownId = state.question.id; shownNumber = number;
     }
-    const answer = plain(await ask(`  ${style.amber('›')} `)).trim();
+    // An answer that was never graded (a provider failure, or a check that
+    // stopped) is saved; Enter sends it again instead of retyping it.
+    const draft = savedDraft(await store.read(session.id));
+    const draftLine = draft && (draft.kind === 'dispute' ? `/dispute ${draft.text}` : draft.text);
+    if (draftLine && draftLine !== shownDraft) {
+      terminal.note(`Your last ${draft.kind === 'dispute' ? 'dispute' : 'answer'} was not graded and is saved: ${plain(draft.text)}\nPress Enter to send it again, or type a new response.`);
+      shownDraft = draftLine;
+    }
+    const answer = plain(await ask(`  ${style.amber('›')} `)).trim() || draftLine || '';
     signal?.throwIfAborted();
     if (!answer) continue;
     if (answer === '/quit') { terminal.line(''); terminal.note('Progress saved. Run sphinx check when you are ready to continue.'); return 1; }

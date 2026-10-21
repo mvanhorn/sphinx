@@ -433,14 +433,17 @@ test('picking a model during the questions grades with it from then on, and can 
 });
 
 test('picking a model mid-review stops that run and restarts the review on the new model', async t => {
+  let inFlight;
+  const firstCall = new Promise(resolve => { inFlight = resolve; });
   const f = await fixture(t, { plans: ['claude'], generate: async (n, options) => {
     await options.beforeCall();
-    // The pick can land while beforeCall saves; an abort listener added after that never fires.
-    if (n === 1) await new Promise((_, reject) => { options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }); if (options.signal.aborted) reject(options.signal.reason); });
+    if (n === 1) await new Promise((_, reject) => { options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }); inFlight(); });
     return { questions: [q] };
   } });
   f.present();
-  for (let i = 0; i < 300 && !f.interview.state.models?.reviewing; i++) await delay(10);
+  // Pick only once the first review call is running; picking earlier makes the
+  // restarted review the first call, which this fake would then hold forever.
+  await firstCall;
   assert.equal(f.interview.state.models.reviewing, true);
   const res = await pickModel(f, { provider: 'claude', model: 'haiku' });
   assert.deepEqual(await res.json(), { ok: true, restarting: true });

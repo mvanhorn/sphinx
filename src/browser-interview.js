@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DISTANCES, loadConfig, policyHash, readJson, repositoryConfigInfo, saveConfig } from './config.js';
 import { revalidateSnapshot, repositoryName } from './git.js';
-import { createSessionStore } from './sessions.js';
+import { createSessionStore, savedDraft } from './sessions.js';
 import { prepareInteractiveCheck, isRateLimit, isCliFailure, switchChoices, PLAN_NAMES } from './check-recovery.js';
 import { claimCheckpointDialog, finishCheckpointDialog, waitForCheckpointTerminal } from './terminal-launch.js';
 import { browserPage } from './browser-page.js';
@@ -431,7 +431,8 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
         // Answers can also arrive from sphinx answer or a terminal check. Follow
         // the saved session so this page, and the Git operation waiting on it, keep up.
         const shown = visible;
-        const action = await waitForAction({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'question', ...(visible.browserError ? { error: visible.browserError } : {}) }, ['answer', 'learn', 'dispute'], async () => {
+        const draft = savedDraft(await store.read(request.id));
+        const action = await waitForAction({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'question', ...(draft ? { draft } : {}), ...(visible.browserError ? { error: visible.browserError } : {}) }, ['answer', 'learn', 'dispute'], async () => {
           const saved = store.public(await store.read(request.id));
           return saved.status === 'passed' || saved.progress.completed !== shown.progress.completed || saved.question?.id !== shown.question?.id ? saved : null;
         });

@@ -86,6 +86,13 @@ function reviewFailure(error, session, signal) {
 // or the final save persists them alongside the call count.
 const meterFor = session => usage => { session.tokens = addUsage(session.tokens, usage); };
 
+/** The unsent text for the current question, or null. Kept out of publicSession, which reaches the coding agent. */
+export function savedDraft(session) {
+  const draft = session?.draft, question = session?.questions?.[session.index];
+  if (!draft || !question || draft.questionId !== question.id || session.status === 'passed') return null;
+  return { kind: draft.kind, text: draft.text };
+}
+
 // Documentation-only changes need no understanding check and no model call.
 const DOCUMENTATION = /(?:^|\/)(?:readme|license|licence|changelog|changes|authors|contributors|notice|code_of_conduct|contributing)(?:\.[a-z]+)?$|\.(?:md|mdx|markdown|txt|rst|adoc)$/iu;
 export const documentationOnly = files => Array.isArray(files) && files.length > 0 && files.every(file => typeof file === 'string' && DOCUMENTATION.test(file));
@@ -334,14 +341,27 @@ export function createSessionStore({ env = process.env, generate = generateAsses
         throw error;
       }
       if (callLimit(session) !== null && session.calls >= callLimit(session)) throw new Error(`Assessment call limit (${callLimit(session)}) reached. No additional model request was made.`);
+      // Keep the human's text until a grade is saved, so a provider failure or
+      // cancellation never makes them type it again (see savedDraft).
+      if (!learn) {
+        session.draft = {questionId:question.id,kind:dispute?'dispute':'answer',text:text.trim(),at:now()};
+        await save(session);
+      }
       const beforeCall = async () => { signal?.throwIfAborted(); await budget(session); signal?.throwIfAborted(); };
-      const result = await withUsageMeter(meterFor(session), () => withUsagePurpose('grading', () => grade({snapshot:session.snapshot,question,answer:text.trim(),config:evaluatorConfig(config,session.route),review:session.review,dispute,learn,beforeCall,signal,env})));
+      let result;
+      try {
+        result = await withUsageMeter(meterFor(session), () => withUsagePurpose('grading', () => grade({snapshot:session.snapshot,question,answer:text.trim(),config:evaluatorConfig(config,session.route),review:session.review,dispute,learn,beforeCall,signal,env})));
+      } catch (error) {
+        if (learn || signal?.aborted || error?.name === 'AbortError') throw error;
+        throw withRecoveryMessage(error, `${error.message} Your ${dispute ? 'dispute reason' : 'answer'} was saved and is offered again when you resume this question.`);
+      }
       signal?.throwIfAborted();
       if (!['correct','incorrect','ambiguous'].includes(result.verdict)) throw new Error('Evaluator returned an invalid verdict. The check remains pending.');
       if ((learn || dispute) && result.verdict === 'correct') throw new Error('A learning request or dispute cannot complete a concept. The check remains pending.');
       // Capture after charging the grade: cancellation rolls back progress, not
       // model usage, and leaves the same question available to the human.
       const beforeAnswer = structuredClone(session);
+      delete session.draft;
       session.attempts.push({questionId:question.id,index:session.index,kind:dispute?'dispute':learn?'learn':'answer',prompt:question.prompt,answer:text.trim(),verdict:result.verdict,feedback:result.feedback,at:now()});
       // Score each question once, on its first real grade. A dispute or an
       // ambiguous grade leaves it unscored; asking for an explanation counts as a miss.

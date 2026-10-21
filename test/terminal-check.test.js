@@ -105,3 +105,19 @@ test('a failed grade keeps the question open instead of ending the check; cancel
   const stopping = { ...store, answer: async () => { throw cancelled; } };
   await assert.rejects(runTerminalCheck({ store: stopping, session: { id: 'x', questions: [failing.q1], route: {}, snapshot: { repoRoot: '/r', target: { ref: 'refs/heads/main' } } }, config: DEFAULT_CONFIG, ask: async () => 'An answer', terminal: createTerminal({ stream, env: { NO_COLOR: '1' }, width: 80 }), stream, env: { SPHINX_HOME: '/nonexistent' }, validate: async () => {}, choose: async () => 'pause' }), /cancelled/);
 });
+
+test('a saved ungraded answer is shown once and Enter sends it again without retyping', async () => {
+  const q1 = question('q1', 'What happens on redelivery?');
+  const session = { id: 'x', index: 0, status: 'active', questions: [q1], draft: { questionId: 'q1', kind: 'dispute', text: 'It assumes one worker.' }, route: {}, snapshot: { repoRoot: '/r', target: { ref: 'refs/heads/main' } } };
+  const sent = [];
+  const done = { status: 'passed', question: null, progress: { completed: 1, total: 1 }, verdict: 'ambiguous', feedback: '' };
+  const store = { start: async () => ({ status: 'active', question: q1, progress: { completed: 0, total: 1 } }), read: async () => session, public: s => s,
+    answer: async (_id, text, _c, options) => { sent.push({ text, dispute: options.dispute }); return done; } };
+  let output = '';
+  const stream = new Writable({ write(chunk, _e, next) { output += chunk; next(); } });
+  const answers = [''];
+  const code = await runTerminalCheck({ store, session, config: DEFAULT_CONFIG, ask: async () => answers.shift(), terminal: createTerminal({ stream, env: { NO_COLOR: '1' }, width: 80 }), stream, env: { SPHINX_HOME: '/nonexistent' }, validate: async () => {}, choose: async () => 'pause' });
+  assert.equal(code, 0);
+  assert.match(output, /Your last dispute was not graded and is saved: It assumes one worker\./);
+  assert.deepEqual(sent, [{ text: 'It assumes one worker.', dispute: true }]);
+});
