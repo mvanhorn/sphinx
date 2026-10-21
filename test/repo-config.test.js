@@ -118,7 +118,7 @@ test('symlinks and directories are refused without modifying their targets or cr
 test('setup accepts project context separately from policy and preserves existing prose', async t => {
   const args = await fixture(t);
   const first = await initializeRepository({ ...args, context: 'A warehouse application. Stock reservations must be atomic.' });
-  assert.equal(await readFile(first.contextPath, 'utf8'), 'A warehouse application. Stock reservations must be atomic.\n');
+  assert.match(await readFile(first.contextPath, 'utf8'), /## About this project\nA warehouse application\. Stock reservations must be atomic\.\n\n## What to ask about\n/);
   const second = await initializeRepository({ ...args, context: 'New text must not overwrite existing context.' });
   assert.equal(await readFile(second.contextPath, 'utf8'), await readFile(first.contextPath, 'utf8'));
   assert.equal(first.config.context, undefined);
@@ -142,4 +142,22 @@ test('repeated initialization creates no new files and keeps stable policy bytes
   assert.deepEqual(second.created, []);
   assert.deepEqual(second.config, first.config);
   assert.equal(await readFile(first.configPath, 'utf8'), content);
+});
+
+test('the questionnaire can set a repository distance, keeping its other settings', async t => {
+  const { mkdtemp, readFile, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { setRepositoryDistance } = await import('../src/repo-config.js');
+  const dir = await mkdtemp(join(tmpdir(), 'sphinx-set-distance-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  await setRepositoryDistance(dir, 'low');
+  assert.deepEqual(JSON.parse(await readFile(join(dir, '.sphinxconfig'), 'utf8')), { version: 1, distance: 'low' });
+  await writeFile(join(dir, '.sphinxconfig'), JSON.stringify({ version: 1, branches: ['main'], exclude: ['dist/**'], distance: 'low' }));
+  await setRepositoryDistance(dir, 'high');
+  assert.deepEqual(JSON.parse(await readFile(join(dir, '.sphinxconfig'), 'utf8')), { version: 1, branches: ['main'], exclude: ['dist/**'], distance: 'high' });
+  // Only the distance line changes in a hand-formatted file.
+  await writeFile(join(dir, '.sphinxconfig'), '{\n  "version": 1,\n  "branches": ["main"]\n}\n');
+  await setRepositoryDistance(dir, 'low');
+  assert.equal(await readFile(join(dir, '.sphinxconfig'), 'utf8'), '{\n  "version": 1,\n  "branches": ["main"],\n  "distance": "low"\n}\n');
+  await assert.rejects(setRepositoryDistance(dir, 'sideways'), /distance must be/);
 });

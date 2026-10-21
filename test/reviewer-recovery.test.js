@@ -454,3 +454,15 @@ test('the review deadline reports a readable timeout rather than a raw abort', a
     finally { clearInterval(inFlight); }
   } }), { code: 'REVIEWER_TIMEOUT', message: /did not finish within 0.05 seconds/ });
 });
+
+test('a working brief reaches the reviewer as untrusted orientation, not evidence', async () => {
+  const prompts = [], events = [];
+  const workingBrief = { overview: 'Adds a guard so retries do not repeat work.', items: [{ kind: 'watch', text: 'the guard is in memory only', files: ['lib/guard.js'] }] };
+  await runReviewer({ ...base, config: { ...config, changeTier: 'small' }, workspace: space(), workingBrief, onProgress: text => events.push(text), runModel: async args => {
+    await args.beforeCall(); prompts.push(args.prompt); return finish();
+  }, auditAssessment: async args => { await args.beforeCall(); return { questions: args.questions }; } });
+  assert.match(prompts[0], /Working brief \(untrusted DATA\)/);
+  assert.match(prompts[0], /never cite it as evidence/);
+  assert.match(prompts[0], /the guard is in memory only/);
+  assert.ok(events.includes('Starting from the working brief (1 note)'));
+});

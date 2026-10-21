@@ -135,7 +135,7 @@ test('accepting onboarding defaults preserves existing per-tier models and rever
 });
 
 test('agent checkboxes accept arbitrary combinations, preselect detection, and skip when flags are explicit', async () => {
-  const initial = { provider: 'claude', events: 'pre-push', branches: 'main', remotes: '*', level: 'standard', mode: 'block' };
+  const initial = { provider: 'claude', events: 'pre-push', branches: 'main', remotes: '*', level: 'standard', distance: 'high', mode: 'block' };
   let selections = 0;
   const output = capture();
   const prompts = createPrompts({ ui: output.ui, ask: () => assert.fail('other choices were supplied'), select: async options => {
@@ -189,18 +189,19 @@ test('explicit model flags alter only their requested routes and reject invalid 
 });
 
 test('guided setup defers branch, remote, and depth questions unless the human customizes', async () => {
-  const output = capture(), answers = ['2', '', 'release/*', 'origin', 'thorough'];
+  const output = capture(), answers = ['2', '', 'release/*', 'origin', 'thorough', 'low'];
   const values = await askInstall(DEFAULT_CONFIG, { agents: 'none', preset: 'claude-economy' }, createPrompts({ ui: output.ui, ask: async () => answers.shift() }), { hasExistingConfig: false });
-  assert.match(output.text().replace(/\s+/g, ' '), /Before pushes to main, master on any remote, at standard depth\./);
+  assert.match(output.text().replace(/\s+/g, ' '), /Before pushes to main, master on any remote, at standard depth, mixed questions\./);
   assert.match(output.text(), /When should Sphinx run\?/);
   assert.deepEqual(applyInstallOptions(DEFAULT_CONFIG, values).branches, ['release/*']);
   assert.equal(values.level, 'thorough');
+  assert.equal(values.distance, 'low', 'Customizing also asks how close to the code questions get');
   const kept = await askInstall(DEFAULT_CONFIG, { agents: 'none', preset: 'claude-economy' }, createPrompts({ ui: capture().ui, ask: async () => '' }), { hasExistingConfig: false });
   assert.deepEqual(applyInstallOptions(DEFAULT_CONFIG, kept).branches, DEFAULT_CONFIG.branches);
   assert.equal(kept.events, undefined);
 });
 
-const onboardingPolicy = { events: 'pre-push', branches: 'main', remotes: '*', level: 'standard', mode: 'block' };
+const onboardingPolicy = { events: 'pre-push', branches: 'main', remotes: '*', level: 'standard', distance: 'high', mode: 'block' };
 
 test('fresh onboarding asks agents first, recommends economical CLI models, then offers recommended checkpoints', async () => {
   for (const agent of ['codex', 'claude']) {
@@ -329,4 +330,17 @@ test('custom paid routes require explicit permission unless machine-wide permiss
     assert.equal(values['allow-paid'], allowed ? undefined : true);
     for (const tier of ['small', 'medium', 'large']) assert.equal(values[tier], 'openrouter:vendor/paid-model');
   }
+});
+
+test('setup recommends an installed coding plan even when the user works in another agent', async () => {
+  let seen;
+  const values = await askInstall(DEFAULT_CONFIG, { agents: 'cursor', ...onboardingPolicy }, {
+    choose: async options => { if (options.title === 'Choose your evaluator models') seen = options; return options.current; },
+    multiselect: async () => [], text: async options => options.current,
+  }, { hasExistingConfig: false, installedPlans: ['claude'] });
+  assert.equal(seen.current, 'claude-economy');
+  assert.equal(seen.choices[0].value, 'claude-economy');
+  assert.match(seen.choices[0].label, /\(recommended\)/);
+  assert.equal(values.preset, 'claude-economy');
+  assert.ok(seen.choices.some(choice => /free router \(slow, best effort\)/.test(choice.label)));
 });

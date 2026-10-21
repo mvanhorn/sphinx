@@ -10,6 +10,8 @@ This page is the reference for reviewer models, usage limits, repository policy,
 - [Project context](#project-context)
 - [Files Sphinx never reads](#files-sphinx-never-reads)
 - [Background preparation](#background-preparation)
+- [GitHub commit status and pull requests](#github-commit-status-and-pull-requests)
+- [Browser or terminal](#browser-or-terminal)
 
 ## Settings locations
 
@@ -21,7 +23,8 @@ This page is the reference for reviewer models, usage limits, repository policy,
 | Skip and yolo log | `~/.config/sphinx/overrides.jsonl` |
 | Repository policy | `.sphinxconfig` (legacy `.sphinx.json` is read when `.sphinxconfig` is absent) |
 | Repository exclusions | `.sphinxignore` |
-| Project context | `.sphinxcontext.md` |
+| Project context and question preferences | `.sphinxcontext.md` (kept out of Git by default) |
+| Your question preferences for every repository | `~/.config/sphinx/context.md` |
 
 `SPHINX_HOME` relocates all machine-wide settings, credentials, and assessment state. `sphinx config` shows effective settings and paths. A complete global example using the paid Haiku preset is in [examples/config.json](../examples/config.json).
 
@@ -118,6 +121,10 @@ The tier and your chosen depth set the maximum number of initial questions:
 
 These are ceilings, not quotas: the reviewer asks fewer questions when the evidence supports fewer distinct behaviors, and never pads. A wrong answer adds a replacement question for the same concept, so a check can ask more than the initial count. Changing the model does not change the question count.
 
+## Question audit
+
+After the reviewer writes questions, an independent model call can audit them against the code before you see them: it fixes answer keys that don't match the code, and rewrites questions that ask for trivia or reveal their own answers. By default (`"audit": "large"` in `config.json`) only large changes get that call; small and medium ones check their own questions in the same request, which saves one long model call (often 10–20 seconds) per check. Set `"audit": "all"` to audit every change. A decision to ask no questions is always audited, at any size.
+
 ## Model calls, tokens, and limits
 
 **Model calls have no default cap** (`maxModelCalls: null`, `agentMaxTurns: null`). Every request is counted: background investigation, compaction, the question audit, grading, replacement audits, and failed requests. The questionnaire shows calls and tokens as the check runs, plus cost when the provider reports it.
@@ -165,6 +172,7 @@ Call caps bound requests and byte limits bound evidence. Neither is a dollar or 
   "events": ["pre-push"],
   "branches": ["main", "release/*"],
   "level": "standard",
+  "distance": "mixed",
   "exclude": ["vendor/**"]
 }
 ```
@@ -176,8 +184,10 @@ Call caps bound requests and byte limits bound evidence. Neither is a dollar or 
 | `branches` | Push policies match the **destination** branch; commit policies match the current local branch |
 | `remotes` | Remote name patterns for pushes; default `*` |
 | `level` | `relaxed`, `standard`, or `thorough` |
+| `distance` | `high`: high-level design (what the change does, how it fits into the system, what it affects); `low`: low-level implementation details (its specific logic, conditions, and edge cases); `mixed` (default): a bit of both. The questionnaire's distance chip saves a change here when the current check ends |
 | `exclude` | Extra ignore patterns, added to machine-wide ones |
 | `backgroundPreparation` | `false` opts this repository out |
+| `github` | GitHub stamps; see [below](#github-commit-status-and-pull-requests) |
 
 Branch defaults come from machine-wide settings (initially `main` and `master`), not from the branch you happen to have checked out. Without prompts:
 
@@ -191,18 +201,24 @@ If both `.sphinxconfig` and legacy `.sphinx.json` exist, `.sphinxconfig` wins an
 
 **Manual push checks.** `sphinx check --remote origin --branch main` selects the destination; otherwise Sphinx uses the upstream. Multiple destination refs are assessed separately. Tag-only pushes and deletions do not trigger checks in v0.1.
 
+**Pull request branches.** Set `"branches": ["*"]` to check pushes to every branch. The first push of a new branch is checked from where it left the remote's default branch (the same range the pull request shows), using local remote-tracking refs; later pushes check only the new commits.
+
 ## Project context
 
-`.sphinxcontext.md` describes what the project does, who uses it, important workflows, and architecture boundaries. It is included in every reviewer, compaction, and grading request.
+`.sphinxcontext.md` has two sections. **About this project** covers what the project does, who uses it, important workflows, and architecture boundaries. **What to ask about** holds question preferences, such as "don't ask about styling" or "focus on billing". Your preferences for every repository go in `~/.config/sphinx/context.md`, which `sphinx install` creates; the repository's file wins where they disagree. Both are included in every reviewer, audit, compaction, and grading request.
+
+- **Preferences choose topics, not facts.** The reviewer avoids areas you skip and leans toward the ones you name. When an entire change falls in a skipped area and alters no behavior, data, security, or failure handling outside it, the check can pass with no questions at any size. The independent audit verifies that decision and can add a question instead. Without any context or preferences, only small changes can pass with no questions.
+- **Comments are for you.** HTML comments (`<!-- -->`) are stripped before anything reaches a model, so the template's guidance costs nothing. A file that is still only the template counts as empty.
+- **Personal by default.** `sphinx init` adds a new `.sphinxcontext.md` to `.git/info/exclude`, which changes nothing outside your machine. To share it, run `git add -f .sphinxcontext.md` and commit it. Files that are already committed are unaffected.
 
 ```sh
-sphinx init --yes --context 'A booking service for shared equipment. Reservations must never overlap.'
+sphinx init --yes --context 'A booking service for shared equipment. Reservations must never overlap.'   # fills About this project
 ```
 
 - Keep it under 16,000 bytes and free of secrets. It respects `.sphinxignore`.
 - The reviewer checks its claims against code. It cannot override Sphinx policy or authorize reading ignored files.
 - Without context, the reviewer establishes purpose from documentation and source rather than inventing requirements.
-- Changing it invalidates prepared questions and completion records.
+- Changing either file invalidates prepared questions and completion records.
 
 ## Files Sphinx never reads
 
@@ -239,3 +255,52 @@ After commits, merges, rewrites, and checkouts, Sphinx schedules a detached revi
 - Set `backgroundPreparation: false` in `config.json` or `.sphinxconfig` to opt out. A repository cannot re-enable preparation disabled machine-wide.
 - While yolo is on, preparation is paused: no new model request starts, although one already in progress may finish.
 - A first push, a branch without local tracking history, or a push to an unexpected destination needs a cold review at push time. Pre-commit checks always review on demand. Run `git fetch` if remote history is missing.
+
+## GitHub commit status and pull requests
+
+When you push to GitHub and a check passes, Sphinx marks the pushed commit with a `sphinx/understanding` commit status, for example "Sphinx stamped · 3 questions, 2 first try". It shows next to the commit and in the pull request's checks. A skipped check is marked as a failure ("Understanding check skipped"). Yolo pushes and commit checkpoints are not marked.
+
+```json
+{ "github": { "status": true, "comment": false, "answers": false } }
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `status` | `true` | Post the commit status |
+| `comment` | `false` | Keep one comment on the branch's open pull request listing every check on that branch: questions, first-try results, and the model. It is edited in place on later pushes |
+| `answers` | `false` | Also include your answers in that comment |
+
+Set these in `config.json` for yourself or in `.sphinxconfig` for a repository. Private answer keys are never posted.
+
+It uses the [GitHub CLI](https://cli.github.com) and its existing login, in a detached process after Git continues, so it never slows or blocks a push. If `gh` is missing or not signed in, the remote isn't GitHub, or any request fails, nothing is posted and nothing else changes. The worker waits a few minutes for the push to land and up to 15 minutes for a pull request to be opened; the result of the last run is in `github/last.json` in Sphinx's data directory.
+
+### The Sphinx check (GitHub Action)
+
+Commit statuses are one line. For a proper **Sphinx** check with a summary in the pull request's Checks tab, add the Sphinx Action to the repository:
+
+```sh
+sphinx init --github-check     # writes .github/workflows/sphinx.yml; commit and push it
+```
+
+How it fits together:
+
+- **On the contributor's machine:** after a pass, Sphinx comments on the branch's pull request with a summary and an encoded stamp for that exact commit. For a pull request from a fork, the comment goes on the upstream pull request. The questionnaire shows "Post the Sphinx stamp to the pull request" for pushes that look like a pull request (a GitHub remote, not its default branch). It is on by default when the repository has the Sphinx workflow, and otherwise follows `github.comment`.
+- **In the repository:** the Action runs when a pull request is opened or updated and when a comment is posted or edited. It reads the newest stamp for the pull request's latest commit, from the author or someone with write access, and writes the **Sphinx** check: stamped, with the number of questions, first-try results, depth, distance, and reviewer; failed if the check was skipped; or neutral ("No Sphinx stamp for this commit") until the author passes. With `require: true` in the workflow, a missing stamp fails the check instead.
+- **Safety:** the workflow uses `pull_request_target` and `issue_comment` so it can write checks for fork pull requests, and it never checks out or runs pull request code. It reads comments through the API only. It needs `checks: write` and read access to pull requests and issues.
+- When a repository runs the Action, Sphinx skips the separate commit status, since the check replaces it.
+
+The workflow pins the Action to a Sphinx release tag (`parthh01/sphinx/action@v0.1.12`, for example). Any repository can use it; the path only says where the Action's code lives.
+
+**Requiring it for a team.** With the Action, set `require: true` and add the **Sphinx** check to branch protection. Without it, add `sphinx/understanding` as a required status check. Pull requests whose head commit was not pushed through a passing check then cannot merge. The status is self-reported by the pusher's machine: it shows the check happened, but it is not a cryptographic proof, and anyone with write access can set a commit status.
+
+## Browser or terminal
+
+`interface` in `config.json` chooses where a push's questions appear. Set it with `sphinx config --interface <auto|browser|terminal>`.
+
+| Value | Behavior |
+| --- | --- |
+| `auto` (default) | The browser on a local Mac, where Sphinx can open it in the background. Elsewhere (SSH, Linux, WSL), inline in the terminal you ran Git from |
+| `terminal` | Always the terminal |
+| `browser` | Always the browser (on Linux and over SSH, open the printed local URL) |
+
+Inline questions need a terminal a person is looking at. When Git runs from a coding agent's shell there isn't one, so Sphinx opens a terminal window on a desktop instead, and falls back to the browser when it can't do either. `interface` is a personal setting; it can't be set in `.sphinxconfig` and doesn't change what a check asks.

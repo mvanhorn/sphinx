@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import { promisify } from 'node:util';
 import { loadIgnorePolicy } from './ignore.js';
 import { workspaceDiffText } from './review-workspace.js';
+import { repositoryName } from './git.js';
 
 const exec = promisify(execFile);
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
@@ -170,7 +171,7 @@ export async function loadChangeView(snapshot, config, { env = process.env } = {
   const byPath = new Map(files.map(file => [file.path, file]));
   const totals = summarize(files);
   const header = {
-    checkpoint: snapshot.id, repository: basename(root), event: snapshot.event,
+    checkpoint: snapshot.id, repository: await repositoryName(root).catch(() => basename(root)), event: snapshot.event,
     remote: snapshot.target?.remote ?? null, destination: snapshot.target?.ref ?? null,
     base: snapshot.base ?? null, head: commit ? null : snapshot.head, staged: commit,
     excludedFiles: Array.isArray(snapshot.omitted) ? snapshot.omitted.length : 0,

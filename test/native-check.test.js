@@ -75,7 +75,7 @@ test('native forms complete each concept while tool results contain only status 
   assert.doesNotMatch(forms[0].message, /model calls/);
   assert.ok(forms[0].message.includes(`Repository: ${f.snapshot.repoRoot}`));
   assert.match(forms[0].message, /Options:\n- Yes\n- No/);
-  assert.match(forms[1].message, /FEEDBACK_PRIVATE/);
+  assert.match(forms[1].message, /FEEDBACK_PRIVATE/, 'Feedback the grader wrote is shown');
   assert.deepEqual(forms[0].requestedSchema.properties.action.enum, ['answer', 'learn', 'dispute', 'pause']);
   assert.doesNotMatch(JSON.stringify(forms), /ANSWER_KEY_PRIVATE|RUBRIC_PRIVATE/);
   assert.doesNotMatch(JSON.stringify(result), /question|answer|feedback|HUMAN_RESPONSE_PRIVATE|FEEDBACK_PRIVATE|ANSWER_KEY_PRIVATE|RUBRIC_PRIVATE/i);

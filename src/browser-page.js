@@ -1,3 +1,5 @@
+import { sphinxMark } from './logo.js';
+import { VERSION } from './version.js';
 /** Static UI only. Model-authored content always enters the DOM as textContent. */
 export function browserPage({ token, nonce }) {
   return `<!doctype html>
@@ -9,12 +11,27 @@ button,textarea{font:inherit}button{cursor:pointer}button:disabled{cursor:defaul
 button:focus-visible,textarea:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .shell{height:100vh;height:100dvh;display:flex;flex-direction:column}
 header{min-height:52px;border-bottom:1px solid var(--line);padding:8px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-.brand{display:flex;align-items:baseline;gap:14px}.brand strong{font:600 19px ui-monospace,SFMono-Regular,Menlo,monospace}.brand strong::before{content:"◆";color:var(--amber);font-size:.7em;margin-right:.45em;vertical-align:.12em}.brand span{color:var(--muted);font-size:14px}
-.scope{border-bottom:1px solid var(--line);padding:8px 24px 9px;font-size:13px;line-height:1.45;background:#f5f1eb}
+.brand{display:flex;align-items:center;gap:14px}.brand strong{display:flex;align-items:center;gap:9px;font:600 19px ui-monospace,SFMono-Regular,Menlo,monospace}.brand svg{color:var(--amber);flex-shrink:0}.brand span{color:var(--muted);font-size:14px}
+.brand small{font:12px var(--mono);color:var(--muted);margin-left:-8px}.update{font-size:12px;padding:2px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--amber);cursor:pointer;white-space:nowrap}.update:hover:not(:disabled){border-color:var(--amber)}.update:disabled{color:var(--muted);cursor:default}
+.scope{border-bottom:1px solid var(--line);padding:7px 24px;font-size:13px;line-height:1.45;color:var(--muted)}
+.facts dt{display:none}.facts dd{font-weight:400!important}.facts div:has(#scope-range){display:none}.facts div+div::before{content:"·";margin-right:8px;color:#b7ab9c}.facts #meta{color:var(--ink);font-weight:600!important}.scope-note{display:none!important}
 .facts{display:flex;flex-wrap:wrap;gap:2px 20px;margin:0;align-items:baseline}.facts div{display:flex;gap:6px;min-width:0}.facts dt{color:var(--muted)}.facts dd{margin:0;font-weight:600;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
-.facts .mono{font:600 12.5px var(--mono)}.scope-note{margin:2px 0 0;color:var(--muted);font-size:12px}#usage{color:var(--muted);font-weight:400;font-variant-numeric:tabular-nums}
+.model-cell{position:relative}.model-chip{font:inherit;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:999px;padding:1px 9px 1px 10px;margin-right:6px;cursor:pointer;white-space:nowrap}.model-chip:hover:not(:disabled){border-color:var(--amber)}.model-chip:disabled{color:var(--muted);cursor:default}.model-chip .caret{color:var(--muted);margin-left:5px;font-size:10px}
+.model-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:20;width:300px;max-height:min(70vh,460px);overflow:auto;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(41,37,36,.14);padding:6px 0;font-size:13.5px;color:var(--ink);display:block!important}.model-menu[hidden]{display:none!important}.model-menu div::before{content:none!important}
+.model-menu h3{margin:0;padding:8px 14px 2px;font-size:13px;font-weight:600}.model-menu .menu-note{margin:0;padding:0 14px 6px;color:var(--muted);font-size:12px;line-height:1.4}
+.model-menu .group{padding:8px 14px 2px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.model-menu .option{display:flex;align-items:baseline;gap:8px;width:100%;padding:6px 14px;border:0;border-radius:0;background:transparent;font:inherit;color:inherit;text-align:left;cursor:pointer}.model-menu .option:hover:not(:disabled),.model-menu .option:focus-visible{background:var(--paper);outline:none}
+.model-menu .option .dot{width:14px;flex:none;color:var(--amber)}.model-menu .option .name{flex:1;overflow-wrap:anywhere}.model-menu .option .desc{display:block;color:var(--muted);font-size:12px;line-height:1.35;margin-top:1px}.model-chip .next{color:var(--amber)}.model-menu p.menu-foot{margin:6px 0 0;cursor:default}.model-menu .option .tag{color:var(--muted);font-size:12px}.model-menu .option:disabled{color:var(--muted);cursor:not-allowed}
+.model-menu .custom{display:flex;gap:6px;padding:4px 14px 6px 36px}.model-menu .custom input{flex:1;min-width:0;font:12.5px var(--mono);padding:4px 7px;border:1px solid var(--line);border-radius:6px}.model-menu .custom button{font-size:12.5px;padding:3px 10px}
+.model-menu .menu-foot{border-top:1px solid var(--line);margin-top:6px;padding:8px 14px 4px;display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px;cursor:pointer}
+.model-menu .confirm{display:block!important;margin:2px 10px 8px;padding:8px 10px;border-radius:8px;background:var(--paper);font-size:12.5px}.model-menu .confirm p{margin:0}.model-menu .confirm div{display:flex;gap:6px;margin-top:8px}.model-menu .menu-error{margin:4px 14px;color:var(--retry);font-size:12.5px}
+@media(max-width:600px){.model-menu{position:fixed;left:12px;right:12px;top:auto;bottom:12px;width:auto}}
+.stamp-row{display:flex;align-items:center;gap:8px;margin:0 0 6px;color:var(--ink);font-size:13px;cursor:pointer}.stamp-row input{accent-color:var(--amber);margin:0}.stamp-row[hidden]{display:none}
+.resume{display:flex;align-items:center;gap:10px;margin:4px 0 12px;padding:8px 10px 8px 14px;border:1px solid var(--line);border-radius:10px;background:#fff;max-width:36em}.resume[hidden]{display:none}.resume code{flex:1;font:13.5px var(--mono);overflow-wrap:anywhere}
+.plus{color:var(--add-ink)}.minus{color:var(--del-ink)}.facts .mono{font:600 12.5px var(--mono)}.scope-note{margin:2px 0 0;color:var(--muted);font-size:12px}#usage{color:var(--muted);font-weight:400;font-variant-numeric:tabular-nums}
 .tabs{display:none}.scope-short{display:none}
-.workspace{flex:1;min-height:0;display:grid;grid-template-columns:minmax(210px,20%) minmax(0,45%) minmax(340px,35%)}
+.workspace{flex:1;min-height:0;display:grid;grid-template-columns:minmax(400px,46%) minmax(0,1fr);grid-template-rows:minmax(0,auto) minmax(0,1fr);grid-template-areas:"q files" "q diff"}
+#question-pane{grid-area:q;border-right:1px solid var(--line)!important}#files-pane{grid-area:files;max-height:30vh;overflow:hidden;border-right:0;border-bottom:1px solid var(--line)}#diff-pane{grid-area:diff;border-right:0}
 .pane{min-width:0;min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--line)}.pane:last-child{border-right:0}
 .pane h2{font-size:13px;font-weight:600;margin:0;overflow-wrap:anywhere;line-height:1.4}.pane-note{font-size:12px;color:var(--muted);margin:0;padding:8px 14px;overflow-wrap:anywhere}
 .filters{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:10px 12px 6px}.filters button{min-height:44px;font-size:12.5px;line-height:1.25;padding:4px 8px}
@@ -46,6 +63,7 @@ main{width:100%;padding:0 20px;display:flex;flex-direction:column;min-height:0}
 .speaker{font-size:13px;font-weight:600;margin-bottom:6px}.turn-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.turn.question .turn-text{font-size:18px;line-height:1.6;font-weight:500}
 .turn-note{font-size:12px;color:var(--muted);margin-top:6px}.turn.notice{color:var(--muted)}.question-number{font-size:13px;color:var(--muted);margin-bottom:6px}
 .question{font-size:18px;line-height:1.6;white-space:pre-wrap;margin:8px 0 20px;font-weight:500}.feedback,.message{white-space:pre-wrap;overflow-wrap:anywhere;margin:0 0 20px}
+.message.passed{font-size:20px;line-height:1.45;font-weight:500;color:var(--pass);padding:18px 20px;border:1px solid #b9d0b1;border-radius:8px;background:#eef5ea}.message.passed::before{content:"✓ ";font-weight:600}.status.passed-note{font-size:13px;color:var(--muted);margin-top:-8px}.status.passed-note::before{content:none}
 ul{padding-left:22px}.status{font-size:13px;color:var(--muted);margin:0 0 12px}
 .composer{flex-shrink:0;border-top:1px solid var(--line);padding:16px 0 12px}.error{font-size:14px;color:#8d271e;white-space:pre-wrap;overflow-wrap:anywhere;margin:0 0 12px}
 label{display:block;font-size:14px;font-weight:600;margin-bottom:8px}
@@ -57,8 +75,17 @@ button.primary{background:var(--amber);color:#fff;border-color:var(--amber);marg
 button:hover:not(:disabled){background:#eee7dc}button.primary:hover:not(:disabled){background:#8b4208}
 .disputing textarea{border-color:#8d271e}.disputing #submit{background:#8d271e;border-color:#8d271e}
 button.quiet{border-color:transparent;color:var(--muted)}button.quiet:hover:not(:disabled){color:var(--ink)}
-.hint{font-size:12px;color:var(--muted);margin:10px 0 0}.recovery{display:grid;gap:12px;margin:0 0 20px}.recovery button{text-align:left;width:100%}.recovery p{margin:4px 0 0;font-size:13px;color:var(--muted)}
+.hint{font-size:12px;color:var(--muted);margin:10px 0 0}.recovery-reason{margin:-8px 0 18px;padding:10px 14px;border-left:2px solid #8d271e;background:#f8ece9;color:#6f1f18;font-size:13.5px;white-space:pre-wrap;overflow-wrap:anywhere}.recovery{display:grid;gap:12px;margin:0 0 20px}.recovery button{text-align:left;width:100%}.recovery p{margin:4px 0 0;font-size:13px;color:var(--muted)}
 header .tools{display:flex;gap:4px}
+.score{display:grid;grid-template-columns:auto auto;grid-template-rows:auto auto;column-gap:14px;align-items:center;margin-left:auto;margin-right:14px;padding:6px 16px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.score-head{display:flex;flex-direction:column;line-height:1.15;grid-row:1/3}.score-label{font-size:11.5px;color:var(--muted)}.score-value{font:600 20px/1.1 var(--mono);font-variant-numeric:tabular-nums}
+.score-value.pending{font-family:inherit;font-size:13px;font-weight:500;line-height:1.6;color:var(--muted)}
+.score-dots{display:flex;gap:4px}.score-dots i{width:11px;height:11px;border-radius:50%;border:1.5px solid #cfc4b6;background:transparent}
+.score-dots i.hit{background:var(--pass);border-color:var(--pass)}.score-dots i.miss{border-color:#c0574a;background:#f6e2df}
+.score-dots i.fresh{animation:pop .5s ease}@keyframes pop{0%{transform:scale(.3)}70%{transform:scale(1.25)}100%{transform:scale(1)}}
+.score-meta{font-size:11px;color:var(--muted);white-space:nowrap}
+@media(prefers-reduced-motion:reduce){.score-dots i.fresh{animation:none}}
+@media(max-width:600px){.score{margin-right:4px;padding:4px 10px}.score-meta{display:none}}
 .skipbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 0;border-bottom:1px solid var(--line);font-size:14px}.skipbar p{flex-basis:100%;margin:0;color:var(--muted);font-size:13px}
 .skipbar input{flex:1;min-width:180px;font:inherit;font-size:14px;padding:6px 10px;border:1px solid #b9afa3;border-radius:6px;background:#fff;color:var(--ink)}
 button.danger{background:#8d271e;border-color:#8d271e;color:#fff}button.danger:hover:not(:disabled){background:#6f1f18}
@@ -69,15 +96,16 @@ button.danger{background:#8d271e;border-color:#8d271e;color:#fff}button.danger:h
 .turn.streaming .turn-text::after{content:"▍";color:var(--amber);animation:pulse 1s steps(2) infinite}
 .status.busy::before{content:"● ";color:var(--amber);animation:pulse 1.2s ease-in-out infinite}.status.phase-question,.status.phase-passed,.status.phase-paused,.status.phase-error,.status.phase-skipped{display:inline-block;font-size:13px;font-weight:600;line-height:1;padding:6px 10px;border:1px solid currentColor;border-radius:999px}.status.phase-question{color:var(--amber)}.status.phase-question::before{content:"◆ "}.status.phase-question.retry{color:var(--retry)}.status.phase-question.retry::before{content:"↺ "}.status.phase-passed{color:var(--pass)}.status.phase-passed::before{content:"✓ "}.status.phase-paused,.status.phase-skipped{color:var(--muted)}.status.phase-paused::before{content:"‖ "}.status.phase-skipped::before{content:"↷ "}.status.phase-error{color:var(--retry)}.status.phase-error::before{content:"! "}@keyframes pulse{50%{opacity:.25}}
 @media(prefers-reduced-motion:reduce){.status.busy::before,.activity.live summary .latest::before{animation:none}}
-footer{flex-shrink:0;padding:0 0 14px;color:var(--muted);font-size:12px;line-height:1.5}footer p{margin:0}#waiting{margin-top:3px}[hidden]{display:none!important}
-@media(max-width:1099px){.workspace{grid-template-columns:minmax(200px,26%) minmax(0,1fr) minmax(320px,40%)}}
-@media(max-width:899px){.tabs{display:flex;gap:4px;padding:6px 12px;border-bottom:1px solid var(--line)}.tabs button{flex:1;min-height:44px;font-size:14px}.tabs button[aria-selected=true]{background:#efe5d8;border-color:var(--amber);font-weight:600}
+footer{flex-shrink:0;display:flex;flex-wrap:wrap;gap:2px 8px;padding:0 0 14px;color:var(--muted);font-size:12px;line-height:1.5}footer p{margin:0}[hidden]{display:none!important}
+#back-question{display:none}
+@media(max-width:1099px){.workspace{grid-template-columns:minmax(360px,52%) minmax(0,1fr)}}
+@media(max-width:899px){#back-question{display:inline-block}.tabs{display:flex;gap:4px;padding:6px 12px;border-bottom:1px solid var(--line)}.tabs button{flex:1;min-height:44px;font-size:14px}.tabs button[aria-selected=true]{background:#efe5d8;border-color:var(--amber);font-weight:600}
 .workspace{display:flex}.pane{display:none;flex:1;border-right:0}.workspace.show-files #files-pane,.workspace.show-diff #diff-pane,.workspace.show-question #question-pane{display:flex}
 #question-pane{overflow-y:auto}.conversation{flex:none;overflow:visible;padding-right:0}.evidence{max-height:none;overflow:visible}}
 @media(max-width:600px){header{padding:8px 12px}.brand{gap:8px}.brand span{display:none}.scope{padding:6px 12px 7px;font-size:12.5px}.facts{gap:0 12px}.facts .mono{font-size:12px}#scope-note{display:none}.scope-short{display:block}.hint,footer{font-size:11.5px}main{padding:0 14px}.conversation{padding-top:16px}.turn.human{margin-left:16px}.actions{gap:4px}button{padding:7px 10px}.hint{max-width:34em}.diffhead{padding:8px 12px}.legend{padding:6px 12px}}
 </style></head><body><div class="shell">
-<header><div class="brand"><strong>sphinx</strong><span>Understanding check</span></div><div class="tools"><button id="skip" class="quiet" type="button">Skip this time</button><button id="pause" class="quiet" type="button">Pause check</button></div></header>
-<section class="scope" aria-label="Change under review"><dl class="facts"><div><dt>Repository</dt><dd id="meta"></dd></div><div><dt id="scope-op-label">Operation</dt><dd id="scope-op">Loading…</dd></div><div><dt>Comparison</dt><dd id="scope-range" class="mono">Loading…</dd></div><div><dt>Changed</dt><dd id="scope-stats">Loading…</dd></div><div id="scope-excluded-row" hidden><dt>Excluded</dt><dd id="scope-excluded"></dd></div><div><dt>Progress</dt><dd id="scope-progress">Connecting…</dd></div><div><dd id="usage"></dd></div></dl>
+<header><div class="brand"><strong>${sphinxMark({ size: 26, id: 'brand-mark' })}sphinx</strong><small id="version">v${VERSION}</small><button id="update" class="update" type="button" hidden></button><span>Understanding check</span></div><div id="score" class="score" hidden><span class="score-head"><span class="score-label">Your understanding</span><strong id="score-value" class="score-value"></strong></span><span id="score-dots" class="score-dots" role="img"></span><span id="score-meta" class="score-meta"></span></div><div class="tools"><button id="skip" class="quiet" type="button">Skip this time</button><button id="pause" class="quiet" type="button">Pause check</button></div></header>
+<section class="scope" aria-label="Change under review"><dl class="facts"><div><dt>Repository</dt><dd id="meta"></dd></div><div><dt id="scope-op-label">Operation</dt><dd id="scope-op">Loading…</dd></div><div><dt>Comparison</dt><dd id="scope-range" class="mono">Loading…</dd></div><div><dt>Changed</dt><dd id="scope-stats">Loading…</dd></div><div id="scope-excluded-row" hidden><dt>Excluded</dt><dd id="scope-excluded"></dd></div><div><dt>Progress</dt><dd id="scope-progress">Connecting…</dd></div><div class="model-cell"><dd><button id="distance" class="model-chip" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="distance-menu" hidden></button><button id="model" class="model-chip" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="model-menu" hidden></button><span id="usage"></span></dd><section id="distance-menu" class="model-menu" role="dialog" aria-label="Question distance for this repository" hidden></section><section id="model-menu" class="model-menu" role="dialog" aria-label="Reviewer model for this check" hidden></section></div></dl>
 <p id="scope-note" class="scope-note">Checkpoint changes: the exact range Sphinx froze for this check, not necessarily an entire pull request.</p><p class="scope-note scope-short">Checkpoint range only — not necessarily a whole pull request.</p></section>
 <nav class="tabs" role="tablist" aria-label="Questionnaire views"><button id="tab-question" role="tab" type="button" aria-controls="question-pane" aria-selected="true">Question</button><button id="tab-files" role="tab" type="button" aria-controls="files-pane" aria-selected="false">Files</button><button id="tab-diff" role="tab" type="button" aria-controls="diff-pane" aria-selected="false">Diff</button></nav>
 <div id="announce" class="sr" aria-live="polite"></div>
@@ -88,7 +116,7 @@ footer{flex-shrink:0;padding:0 0 14px;color:var(--muted);font-size:12px;line-hei
 <p id="filter-total" class="pane-note" aria-live="polite"></p>
 <ul id="file-list" class="filelist" aria-label="Files"></ul><p id="files-note" class="pane-note"></p></aside>
 <section id="diff-pane" class="pane" aria-label="Diff">
-<div class="diffhead"><div><h2 id="diff-title">No file selected</h2><p id="diff-meta">Choose a file from the list, or a code reference beside the question.</p></div>
+<div class="diffhead"><div><h2 id="diff-title">No file selected</h2><p id="diff-meta">Browse the change by opening a file above. Show hint marks the code behind the question.</p></div>
 <div class="diffactions"><button id="context-more" type="button" hidden>More context</button><button id="context-all" type="button" hidden>Full file</button><button id="back-question" type="button">Back to question</button></div></div>
 <p id="diff-legend" class="legend" hidden>+ added · − removed · ▸ lines the reviewer read for the current question</p>
 <p id="diff-note" class="pane-note" role="status" hidden></p><div id="diff-body" class="diffbody"></div></section>
@@ -97,22 +125,144 @@ footer{flex-shrink:0;padding:0 0 14px;color:var(--muted);font-size:12px;line-hei
 <div id="conversation" class="conversation" aria-label="Understanding check conversation">
 <ol id="messages" aria-label="Conversation"></ol>
 <p id="feedback" class="feedback" hidden></p><section id="question" hidden><p id="prompt" class="question"></p><ul id="choices" hidden></ul></section>
-<p id="message" class="message" hidden></p><div id="status" class="status" role="status" aria-live="polite">Connecting to your local checkpoint…</div><div id="recovery" class="recovery" hidden></div>
+<p id="message" class="message" role="status" hidden></p><div id="resume" class="resume" hidden><code id="resume-command"></code><button id="resume-copy" class="quiet" type="button">Copy</button></div><div id="status" class="status" role="status" aria-live="polite">Connecting to your local checkpoint…</div><p id="recovery-reason" class="recovery-reason" hidden></p><div id="recovery" class="recovery" hidden></div>
 </div>
 <section id="evidence" class="evidence" aria-labelledby="evidence-title" hidden><h2 id="evidence-title">Code behind this question</h2><ul id="evidence-list"></ul><p id="evidence-note" class="pane-note"></p></section>
 <div id="composer" class="composer"><p id="error" class="error" role="alert" hidden></p>
 <form id="form"><label id="label" for="response">Your answer</label><textarea id="response" rows="2" maxlength="8000" autocomplete="off" spellcheck="true" placeholder="Your prediction and a short reason…"></textarea>
-<div class="actions"><button type="button" class="quiet" data-action="learn">Explain this</button><button type="button" class="quiet" id="dispute">Dispute question</button><button id="submit" class="primary" type="submit">Send</button></div>
-<p class="hint">Enter to send · Shift+Enter for a new line. Open-book—inspect the code whenever useful.</p></form></div>
-<footer><p>Your answers go directly to Sphinx. The coding agent receives status only.</p><p id="waiting">Closing this tab leaves the check waiting. Use Pause check to stop.</p></footer>
+<div class="actions"><button type="button" class="quiet" id="hint">Show hint</button><button type="button" class="quiet" data-action="learn">Explain this</button><button type="button" class="quiet" id="dispute">Dispute question</button><button id="submit" class="primary" type="submit">Send</button></div>
+<p class="hint">Enter to send · Shift+Enter for a new line. Answer from your understanding first; Show hint reveals the code behind the question.</p></form></div>
+<footer><label id="stamp-row" class="stamp-row" hidden><input id="stamp" type="checkbox"><span>Post the Sphinx stamp to the pull request</span></label><p id="privacy">Answers go straight to Sphinx; your coding agent only sees whether you passed.</p><p id="waiting">Closing this tab leaves the check waiting. Use Pause check to stop.</p></footer>
 </main></div></div>
 <script nonce="${nonce}">
 const token=${JSON.stringify(token)},base='/'+token,$=id=>document.getElementById(id);
-let disputing=false,current,submitting=false,finished=false,connected=false,lastQuestion,lastGraded,lastMessages='';const openGroups=new Set();
+let hinted=false,disputing=false,current,submitting=false,finished=false,connected=false,lastQuestion,lastGraded,lastMessages='';const openGroups=new Set();
 const text=(id,value)=>{$(id).textContent=value||'';$(id).hidden=!value;};
 const compact=n=>n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n);
 const usageText=(u,t)=>{if(!t)return '';const total=(t.input||0)+(t.output||0);if(!total&&t.cost==null)return '';
  return [compact(total)+' tokens',...(t.cost!=null?[t.cost===0?'$0':t.cost<0.0001?'<$0.0001':t.cost<0.01?'$'+t.cost.toFixed(4):'$'+t.cost.toFixed(2)]:[]),...(u?.limit!=null?[u.calls+'/'+u.limit+' calls']:[])].join(' · ');};
+const PROVIDERS={openrouter:'OpenRouter',openai:'Endpoint',claude:'Claude Code',codex:'Codex'};
+const routeText=r=>r?.provider?[PROVIDERS[r.provider]||r.provider,r.model].filter(Boolean).join(' '):'';
+// The repository's understanding score, shown rather than explained: one dot
+// per recent answer (green = right first time), filling empty slots while calibrating.
+let lastScored=-1;
+function scoreView(sc){
+ $('score').hidden=!sc;if(!sc)return;
+ const recent=sc.recent||[],slots=sc.calibrating?sc.answered+sc.needed:Math.max(recent.length,1);
+ const dots=[];
+ for(let i=0;i<slots;i++){const dot=document.createElement('i'),hit=recent[i];
+  if(i<recent.length){dot.className=hit?'hit':'miss';dot.title=hit?'Right first time':'Needed another try';}else dot.title='Not answered yet';
+  if(i===recent.length-1&&lastScored!==-1&&sc.answered>lastScored)dot.className+=' fresh';
+  dots.push(dot);}
+ $('score-dots').replaceChildren(...dots);
+ $('score-dots').setAttribute('aria-label',recent.filter(Boolean).length+' of the last '+recent.length+' answers right first time');
+ $('score-value').textContent=sc.calibrating?'warming up':sc.accuracy+'%';$('score-value').className='score-value'+(sc.calibrating?' pending':'');
+ $('score').title=sc.calibrating?'Answer '+sc.needed+' more question'+(sc.needed===1?'':'s')+' in this repository to get a score.':'Share of questions in this repository you answered right on the first try.';
+ const meta=[];if(sc.streak>1)meta.push(sc.streak+' in a row');if(sc.skipRate!=null)meta.push('skipped '+sc.skipRate+'%');
+ $('score-meta').textContent=meta.join(' · ');lastScored=sc.answered;
+}
+// The reviewer model picker: a chip in the info line opening a small menu.
+// Mid-review it asks once first, because switching restarts the review.
+let menuOpen=false,pendingPick=null,menuError='';
+const MODEL_NAMES={claude:'Claude Code',codex:'Codex',openrouter:'OpenRouter',openai:'Endpoint'};
+const node=(tag,cls,value)=>{const item=document.createElement(tag);if(cls)item.className=cls;if(value!==undefined)item.textContent=value;return item;};
+function modelView(state){
+ const groups=state.models?.groups||[],chip=$('model'),route=routeText(state.route),usage=usageText(state.usage,state.tokens);
+ const offered=groups.length>0&&!finished&&!!route;
+ chip.hidden=!offered;
+ if(offered){chip.replaceChildren(node('span','',route),node('span','caret','▾'));chip.disabled=!!state.models.busy;
+  chip.title=state.models.busy?'You can switch models once this answer is checked.':'Change the reviewer model for this check';}
+ text('usage',offered?usage:[route,usage].filter(Boolean).join(' · '));
+ if(!offered||state.models.busy)closeMenu();else if(menuOpen)buildMenu(state);
+}
+function closeMenu(){if(!menuOpen)return;menuOpen=false;pendingPick=null;menuError='';$('model-menu').hidden=true;$('model').setAttribute('aria-expanded','false');}
+function buildMenu(state){
+ const route=state.route||{},reviewing=!!state.models?.reviewing,keep=document.getElementById('model-save')?.checked===true;
+ const parts=[node('h3','','Model for this check'),node('p','menu-note',reviewing?'Switching restarts the review on the new model. Usage so far stays counted.':'Answers are checked with the new model from now on.')];
+ // The restart question goes at the top, where the eye already is.
+ if(pendingPick){const box=node('div','confirm'),actions=node('div'),go=node('button','primary','Restart'),no=node('button','quiet','Cancel');go.type=no.type='button';
+  go.onclick=()=>commit(pendingPick);no.onclick=()=>{pendingPick=null;buildMenu(current);};box.append(node('p','','Restart the review with '+pendingPick.label+'?'));actions.append(go,no);box.append(actions);parts.push(box);}
+ for(const group of state.models.groups){
+  parts.push(node('div','group',group.label+' · '+group.billing));
+  for(const option of group.models){
+   const selected=route.provider===group.provider&&route.model===option.model,button=node('button','option');button.type='button';
+   button.setAttribute('role','menuitemradio');button.setAttribute('aria-checked',String(selected));button.disabled=!!option.disabled;if(option.disabled)button.title=option.disabled;
+   button.append(node('span','dot',selected?'●':''),node('span','name',option.label),node('span','tag',option.disabled?'off':option.note||''));
+   button.onclick=()=>pick(state,{provider:group.provider,model:option.model,label:(MODEL_NAMES[group.provider]||group.label)+' '+option.label});
+   parts.push(button);
+  }
+  if(group.custom){
+   const row=node('div','custom'),input=node('input'),use=node('button','quiet','Use');input.placeholder='Other model ID…';input.setAttribute('aria-label',group.label+' model ID');input.spellcheck=false;use.type='button';
+   use.onclick=()=>{const model=input.value.trim();if(model)pick(state,{provider:group.provider,model,label:(MODEL_NAMES[group.provider]||group.label)+' '+model});};
+   input.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();use.onclick();}};
+   row.append(input,use);parts.push(row);
+  }
+ }
+ if(menuError)parts.push(node('p','menu-error',menuError));
+ const foot=node('label','menu-foot'),save=node('input');save.type='checkbox';save.id='model-save';save.checked=keep;foot.append(save,node('span','','Also use for future checks'));parts.push(foot);
+ $('model-menu').replaceChildren(...parts);
+ if(pendingPick)$('model-menu').scrollTop=0;
+}
+function pick(state,choice){menuError='';if(state.models?.reviewing){pendingPick=choice;buildMenu(state);return;}commit(choice);}
+async function commit(choice){
+ const save=document.getElementById('model-save')?.checked===true;pendingPick=null;
+ try{const res=await fetch(base+'/action?model=1',{method:'POST',headers:{'Content-Type':'application/json','X-Sphinx-Token':token},body:JSON.stringify({provider:choice.provider,model:choice.model,saveDefault:save})});
+  const data=await res.json().catch(()=>({}));if(!res.ok){menuError=data.error||'Could not switch models.';buildMenu(current);return;}closeMenu();}
+ catch{menuError='Could not reach Sphinx. Try again.';buildMenu(current);}
+}
+$('model').onclick=()=>{if(menuOpen){closeMenu();return;}closeDistance();menuOpen=true;menuError='';$('model-menu').hidden=false;$('model-menu').style.left=$('model').offsetLeft+'px';$('model').setAttribute('aria-expanded','true');buildMenu(current);$('model-menu').querySelector?.('[aria-checked="true"]')?.focus?.();};
+document.onkeydown=event=>{if(event.key!=='Escape')return;if(menuOpen){closeMenu();$('model').focus();}if(distanceOpen){closeDistance();$('distance').focus();}};
+// A click inside the menu can rebuild it, detaching the clicked button; that is not a click outside.
+document.onclick=event=>{if(event.target?.isConnected===false)return;if(menuOpen&&!$('model-menu').contains?.(event.target)&&!$('model').contains?.(event.target))closeMenu();if(distanceOpen&&!$('distance-menu').contains?.(event.target)&&!$('distance').contains?.(event.target))closeDistance();};
+$('resume-copy').onclick=async()=>{try{await navigator.clipboard.writeText($('resume-command').textContent);$('resume-copy').textContent='Copied';setTimeout(()=>{$('resume-copy').textContent='Copy';},1500);}catch{}};
+// A background tab says when it is waiting on you.
+const waitingOnYou=()=>['question','recovery'].includes(current?.phase)&&!finished;
+function titleView(){document.title=waitingOnYou()&&document.visibilityState==='hidden'?'● Sphinx: your answers needed':'Sphinx — understanding check';}
+document.onvisibilitychange=titleView;
+// For a push that may be a pull request: whether to post the stamp there once you pass.
+function stampView(state){
+ const s=state.stamp,row=$('stamp-row');row.hidden=!s||finished;if(row.hidden)return;
+ $('stamp').checked=!!s.post;
+ row.title=(s.action?'This repository shows a Sphinx check on pull requests. ':'')+'After you pass, Sphinx comments on this branch\u2019s pull request with a summary: how many questions, which you got right first time, and the model.'+(s.action?' The Sphinx check reads it.':'')+' Your answers are not included unless you turn that on in your settings.';
+}
+$('stamp').onchange=async()=>{const want=$('stamp').checked;try{const res=await fetch(base+'/action?stamp=1',{method:'POST',headers:{'Content-Type':'application/json','X-Sphinx-Token':token},body:JSON.stringify({post:want})});if(!res.ok)$('stamp').checked=!want;}catch{$('stamp').checked=!want;}};
+// The question distance: shown as a chip, explained in its tooltip, and changeable
+// for this repository. It applies from the next check, since this one's questions exist.
+const DISTANCE_TEXT={high:['High level','High-level design: what the change does, how it fits into the system, and what it affects.'],mixed:['Mixed','A bit of both: some high-level design questions, some low-level implementation details.'],low:['Low level','Low-level implementation details: the specific logic, conditions, and edge cases.']};
+let distanceOpen=false;
+function distanceView(state){
+ const d=state.distance,chip=$('distance');
+ chip.hidden=!d||finished;if(chip.hidden){closeDistance();return;}
+ const label=DISTANCE_TEXT[d.current]?.[0]||d.current;
+ chip.replaceChildren(node('span','',label+' questions'),...(d.next?[node('span','next',' → '+DISTANCE_TEXT[d.next][0]+' next')]:[]),node('span','caret','▾'));
+ chip.title='Question distance: '+label+'. '+DISTANCE_TEXT[d.current]?.[1]+'\\n\\nHigh level: '+DISTANCE_TEXT.high[1]+'\\nMixed: '+DISTANCE_TEXT.mixed[1]+'\\nLow level: '+DISTANCE_TEXT.low[1]+'\\n\\nClick to change it for this repository.';
+ if(distanceOpen)buildDistance(state);
+}
+function closeDistance(){if(!distanceOpen)return;distanceOpen=false;$('distance-menu').hidden=true;$('distance').setAttribute('aria-expanded','false');}
+function buildDistance(state){
+ const d=state.distance,chosen=d.next||d.current,parts=[node('h3','','Question distance'),node('p','menu-note','For this repository, from your next check. This check keeps '+DISTANCE_TEXT[d.current][0].toLowerCase()+' questions.')];
+ for(const value of ['high','mixed','low']){
+  const button=node('button','option'),text=node('span','name');button.type='button';button.setAttribute('role','menuitemradio');button.setAttribute('aria-checked',String(value===chosen));
+  text.append(node('span','',DISTANCE_TEXT[value][0]+(value==='mixed'?' (default)':'')),node('span','desc',DISTANCE_TEXT[value][1]));
+  button.append(node('span','dot',value===chosen?'●':''),text);
+  button.onclick=()=>chooseDistance(value);parts.push(button);
+ }
+ parts.push(node('p','menu-foot',d.next?'Saved to .sphinxconfig when this check ends.':d.scope==='repository'?'Set in this repository’s .sphinxconfig.':'From your machine-wide settings. Changing it here saves it to .sphinxconfig.'));
+ $('distance-menu').replaceChildren(...parts);
+}
+async function chooseDistance(value){
+ try{const res=await fetch(base+'/action?distance=1',{method:'POST',headers:{'Content-Type':'application/json','X-Sphinx-Token':token},body:JSON.stringify({distance:value})});if(res.ok)closeDistance();}catch{}
+}
+$('distance').onclick=()=>{if(distanceOpen){closeDistance();return;}closeMenu();distanceOpen=true;$('distance-menu').hidden=false;$('distance-menu').style.left=$('distance').offsetLeft+'px';$('distance').setAttribute('aria-expanded','true');buildDistance(current);};
+
+// A newer release is offered quietly; installing waits until this check ends.
+function updateView(u){const b=$('update');if(!u?.available){b.hidden=true;return;}b.hidden=false;
+ if(u.status==='scheduled'){b.textContent='Updating to v'+u.latest+' after this check';b.disabled=true;b.title='';}
+ else if(u.status==='failed'){b.textContent='Update could not start';b.disabled=true;b.title='Run '+(u.command||'npm install -g sphinx-understand@latest')+' in a terminal.';}
+ else if(!u.command){b.textContent='v'+u.latest+' available';b.disabled=true;b.title=u.note||'';}
+ else{b.textContent='v'+u.latest+' available · Update';b.disabled=false;b.title='Runs '+u.command+' once this check finishes. Your settings are kept.';}}
+$('update').onclick=async()=>{const b=$('update');b.disabled=true;b.textContent='Scheduling update…';
+ try{const res=await fetch(base+'/action?update=1',{method:'POST',headers:{'Content-Type':'application/json','X-Sphinx-Token':token},body:'{}'});const data=await res.json();updateView(data.update||{available:true,status:'failed'});}catch{updateView({available:true,status:'failed'});}};
 const resize=()=>{$('response').style.height='auto';$('response').style.height=Math.min($('response').scrollHeight||76,180)+'px';};
 function controls(){
  if(!current)return;
@@ -121,6 +271,7 @@ function controls(){
  for(const button of document.querySelectorAll('#composer button'))button.disabled=!canAnswer;
  $('pause').disabled=!connected||submitting||finished;
  for(const id of ['skip','skipconfirm','skipcancel'])$(id).disabled=!connected||finished;
+ $('hint').disabled=!canAnswer||hinted;$('hint').textContent=hinted?'Hint shown':'Show hint';
  for(const button of $('recovery').querySelectorAll('button'))button.disabled=!connected||submitting||finished;
  $('response').disabled=current.phase!=='question'||current.operationClosed||submitting;
 }
@@ -159,13 +310,14 @@ function history(messages){
 function render(state){
  if(current&&state.sequence<current.sequence)return;
  const previous=current;current=state;finished=state.operationClosed||['passed','paused','error','skipped'].includes(state.phase);
- const repo=state.repoRoot?.split(/[\\\\/]/).filter(Boolean).at(-1),branch=state.target?.replace(/^refs\\/heads\\//,'');
+ const repo=state.repoName||state.repoRoot?.split(/[\\\\/]/).filter(Boolean).at(-1),branch=state.target?.replace(/^refs\\/heads\\//,'');
  text('meta',repo||state.change?.header?.repository||'');$('meta').title=state.repoRoot||'';
- text('usage',usageText(state.usage,state.tokens));const messages=state.messages||[];
+ modelView(state);distanceView(state);stampView(state);titleView();
+ $('resume').hidden=!(state.phase==='paused'&&state.resume);if(state.resume)$('resume-command').textContent=state.resume;scoreView(state.score);updateView(state.update);const messages=state.messages||[];
  text('waiting',finished?'':state.waitingGit?'Git continues after you pass. Closing this tab leaves it waiting; Pause check stops it.':'Closing this tab leaves the check waiting. Use Pause check to stop.');
  const label=state.phase==='question'?'Question '+(state.progress.completed+1)+' of '+state.progress.total:state.phase==='working'?'Reviewing…':state.phase==='recovery'?'Review needs your decision':state.phase==='passed'?'Passed':state.phase==='paused'?'Paused':state.phase==='skipped'?'Skipped':state.phase==='error'?'Check stopped':'Waiting…';
  const retry=state.phase==='question'&&[...messages].reverse().find(item=>item.kind==='question')?.followUp;
- text('status',label+(retry?' · Needs another answer':''));scope(state,branch,label);$('status').className='status phase-'+state.phase+(state.phase==='working'?' busy':'')+(retry?' retry':'');text('message',state.message);text('error',state.error);
+ text('status',label+(retry?' · Needs another answer':''));$('message').className='message'+(state.phase==='passed'?' passed':'');scope(state,branch,label);$('status').className='status phase-'+state.phase+(state.phase==='working'?' busy':'')+(retry?' retry':'');if(state.phase==='question'&&!retry)$('status').hidden=true;text('message',state.message);text('error',state.phase==='recovery'?'':state.error);text('recovery-reason',state.phase==='recovery'?state.error:''); if(state.phase==='passed'&&String(state.message||'').includes('\\n')){const [lead,...rest]=state.message.split('\\n');text('message',lead);text('status',rest.join(' '));$('status').className='status passed-note';}
  history(messages);
  // Live activity already shows progress; avoid stacking generic spinners under it.
  if(state.phase==='working'&&(messages.at(-1)?.kind==='activity'||messages.at(-1)?.streaming)){$('status').hidden=true;$('message').hidden=true;}
@@ -179,7 +331,7 @@ function render(state){
   for(const choice of state.question.choices||[]){const li=document.createElement('li');li.textContent=choice;$('choices').append(li);}
   $('choices').hidden=!(state.question.choices||[]).length;
   const key=state.id+':'+state.question.id;
-  if(lastQuestion!==key){$('response').value='';lastQuestion=key;resize();if(disputing)setDispute(false);}
+  if(lastQuestion!==key){$('response').value='';lastQuestion=key;resize();if(disputing)setDispute(false);hinted=false;if(filter==='relevant')filter='all';lastEvidence='';lastFiles='';}
  }
  const graded=[...messages].reverse().find(item=>item.role==='human'&&item.status==='graded');
  if(graded&&lastGraded!==graded.id){lastGraded=graded.id;$('response').value='';resize();if(disputing)setDispute(false);}
@@ -225,6 +377,8 @@ $('response').onkeydown=event=>{
 };
 for(const button of document.querySelectorAll('[data-action]'))button.onclick=()=>send(button.dataset.action);
 $('pause').onclick=()=>send('pause');
+// The hint reveals which code the reviewer read: think first, then look.
+$('hint').onclick=()=>{hinted=true;lastEvidence='';lastFiles='';evidenceList();files();controls();announce('Hint shown: the code behind this question is listed above your answer.');};
 $('skip').onclick=()=>{$('skipbar').hidden=false;$('skipreason').focus();};
 $('skipcancel').onclick=()=>{$('skipbar').hidden=true;};
 $('skipconfirm').onclick=()=>send('skip');
@@ -245,6 +399,13 @@ function totalsText(t){
  if(t.uncountedFiles)parts.push(num(t.uncountedFiles)+' without line counts');
  return parts.join(' · ');
 }
+// Additions in green and deletions in red, as git diff --stat shows them.
+function totalsView(target,t){
+ if(!t){target.replaceChildren();return;}
+ const span=(cls,value)=>{const node=document.createElement('span');if(cls)node.className=cls;node.textContent=value;return node;};
+ const rest=totalsText(t).split(' · ').slice(2);
+ target.replaceChildren(span('',plural(t.files,'file')+' · '),span('plus','+'+num(t.additions)),span('',' '),span('minus','−'+num(t.deletions)),span('',' lines'+rest.map(part=>' · '+part).join('')));
+}
 function scope(state,branch,label){
  const c=state.change,h=c?.header;
  $('scope-progress').textContent=label;
@@ -254,7 +415,7 @@ function scope(state,branch,label){
   $('scope-op').textContent=h.event==='pre-commit'?'Commit to '+dest+' (staged changes)':'Push to '+(h.remote&&h.remote!=='.'?h.remote+' / ':'')+dest;
   $('scope-range').textContent=h.staged?(h.base?short(h.base):'empty repository')+' → staged index':(h.base?short(h.base):'new branch (no destination history)')+' → '+short(h.head);
   $('scope-range').title='Checkpoint '+h.checkpoint+(h.base?'\\nBase '+h.base:'')+(h.head?'\\nHead '+h.head:'');
-  $('scope-stats').textContent=totalsText(c.totals);
+  totalsView($('scope-stats'),c.totals);
   $('scope-excluded-row').hidden=!h.excludedFiles;$('scope-excluded').textContent=h.excludedFiles?plural(h.excludedFiles,'file')+' not shown or counted':'';
   $('scope-note').textContent='Checkpoint changes: the exact range Sphinx froze for this check, not necessarily an entire pull request.'+(h.excludedFiles?' '+plural(h.excludedFiles,'more changed file')+' excluded by privacy or ignore rules; names, contents and line counts are not shown or counted.':'');
  }else{
@@ -287,7 +448,7 @@ function filesNote(){
  if(change.header.excludedFiles)notes.push(plural(change.header.excludedFiles,'changed file')+' excluded by privacy or ignore rules are not listed or counted.');
  return notes.join(' ');
 }
-function refs(){return current?.evidence&&current.question&&current.evidence.questionId===current.question.id?current.evidence.refs:null;}
+function refs(){return hinted&&current?.evidence&&current.question&&current.evidence.questionId===current.question.id?current.evidence.refs:null;}
 function relevantPaths(){return new Set((refs()||[]).filter(ref=>ref.inChange).map(ref=>ref.viewPath));}
 function statsOf(list){return list.reduce((t,f)=>{t.files++;if(f.binary)t.binaryFiles++;else if(f.additions==null)t.uncountedFiles++;else{t.additions+=f.additions;t.deletions+=f.deletions;}return t;},{files:0,additions:0,deletions:0,binaryFiles:0,uncountedFiles:0});}
 const STATUS={added:'Added',modified:'Modified',deleted:'Deleted',renamed:'Renamed'};
@@ -296,6 +457,7 @@ function files(){
  const subset=filter==='relevant'?all.filter(f=>relevant.has(f.path)):all;
  const shown=query?subset.filter(f=>(f.path+' '+(f.oldPath||'')).toLowerCase().includes(query.toLowerCase())):subset;
  const signature=JSON.stringify([changeFor,filter,query,selected,[...relevant],all.length]);
+ $('filter-relevant').hidden=!hinted;document.querySelector?.('.filters')?.toggleAttribute?.('hidden',!hinted);
  $('filter-all').setAttribute('aria-pressed',String(filter==='all'));$('filter-relevant').setAttribute('aria-pressed',String(filter==='relevant'));
  const cited=statsOf(all.filter(f=>relevant.has(f.path)));
  $('count-all').textContent=change?plural(change.totals.files,'file'):'';
@@ -338,7 +500,7 @@ function setTab(name){
 }
 for(const id of ['question','files','diff'])$('tab-'+id).onclick=()=>{setTab(id);announce(id==='question'?'Question view. Your answer is kept.':id==='files'?'Changed files view.':'Diff view.');};
 $('back-question').onclick=()=>{setTab('question');$('response').focus({preventScroll:true});announce('Back to the question. Your answer is kept.');};
-function clearDiff(){$('diff-title').textContent='No file selected';$('diff-meta').textContent='Choose a file from the list, or a code reference beside the question.';$('diff-body').replaceChildren();$('diff-note').hidden=true;$('diff-legend').hidden=true;$('context-more').hidden=true;$('context-all').hidden=true;}
+function clearDiff(){$('diff-title').textContent='No file selected';$('diff-meta').textContent=hinted?'Open a file above, or a code reference beside the question.':'Browse the change by opening a file above. Show hint marks the code behind the question.';$('diff-body').replaceChildren();$('diff-note').hidden=true;$('diff-legend').hidden=true;$('context-more').hidden=true;$('context-all').hidden=true;}
 const NOTES={binary:'Binary file. Its contents are not shown and no line counts are reported.',symlink:'Symbolic link changed. The link target is not shown.',submodule:'Submodule pointer changed. Its contents are outside this repository diff.',unsupported:'This file type is not shown.','rename-only':'Renamed without content changes.','mode-only':'Only the file mode changed; no lines changed.',empty:'Empty file. There are no lines to show.','too-large':'This diff is too large to display here. The totals above still count it.','non-utf8':'Not valid UTF-8 text, so the contents are not shown.'};
 async function openFile(path,{show=false,range,quiet=false}={}){
  if(!current||!change)return;
@@ -394,7 +556,7 @@ $('context-more').onclick=()=>{if(!diff)return;const now=contextFor.get(diff.pat
 $('context-all').onclick=()=>{if(!diff)return;contextFor.set(diff.path,'all');openFile(diff.path);};
 function rangeText(r){return (r.side==='old'?'old ':'')+'line'+(r.end>r.start?'s '+r.start+'–'+r.end:' '+r.start);}
 function evidenceList(){
- const active=current&&['question','working'].includes(current.phase)&&current.question;
+ const active=current&&['question','working'].includes(current.phase)&&current.question&&hinted;
  $('evidence').hidden=!active;
  if(!active){if(lastEvidence!=='inactive'){lastEvidence='inactive';if(diff&&diff.path===selected)drawDiff(undefined,true);}return;}
  const list=refs(),signature=JSON.stringify([current.id,current.question.id,list,Boolean(change),current.change?.status]);

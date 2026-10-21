@@ -1,10 +1,12 @@
 import path from 'node:path';
+import { settingsTarget } from './user-file.js';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { lstat, readFile, mkdir, writeFile, rename, rm, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { listPresentations, claimPresentation } from './presentations.js';
 import { launchCheckpointTerminal, waitForCheckpointTerminal } from './terminal-launch.js';
 import { createBrowserInterview } from './browser-interview.js';
+import { setupNudge } from './repo-setup.js';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
@@ -36,9 +38,9 @@ export function lifecycleHome(name, paths, env = process.env) {
 
 async function text(file) {
   try {
-    const info = await lstat(file);
-    if (!info.isFile() || info.isSymbolicLink() || info.size > 4 * 1024 * 1024) throw new Error(`Refusing to replace a symlink, non-file, or oversized integration: ${file}`);
-    return await readFile(file, 'utf8');
+    const target = (await settingsTarget(file)).path, info = await lstat(target);
+    if (!info.isFile() || info.size > 4 * 1024 * 1024) throw new Error(`Refusing to replace a non-file or oversized integration: ${file}`);
+    return await readFile(target, 'utf8');
   } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
@@ -55,8 +57,10 @@ function json(content, file) {
   catch { throw new Error(`Cannot read ${file}: invalid JSON object. Fix the file and try again.`); }
 }
 
-async function write(file, content) {
-  if (content === null) { await rm(file, { force: true }); return; }
+async function write(link, content) {
+  const { path: file, linked } = await settingsTarget(link);
+  if (content === null && !linked) { await rm(file, { force: true }); return; }
+  content ??= '';
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const mode = await stat(file).then(info => info.mode & 0o777).catch(() => 0o600);
   const temporary = `${file}.${randomUUID()}.tmp`;
@@ -77,14 +81,17 @@ function plan({ name, file, before, after, record }) {
 }
 
 /** Cursor exposes command hooks, but no documented hook that invokes MCP forms. */
-export async function prepareCursorIntegration(paths, { env = process.env, previous } = {}) {
+export async function prepareCursorIntegration(paths, { env = process.env, previous, launcher } = {}) {
   const home = lifecycleHome('cursor', paths, env), file = path.join(home, 'hooks.json');
   await checkDirectories(home, file);
   if (previous && previous.file !== file) throw new Error('Cursor integration home changed. Uninstall from the original home before reinstalling.');
   const before = await text(file), document = json(before, file);
   if (document.version !== undefined && document.version !== 1) throw new Error(`Unsupported Cursor hooks version in ${file}`);
   if (document.hooks !== undefined && !object(document.hooks)) throw new Error(`Invalid hooks object in ${file}`);
-  const command = `SPHINX_HOME=${quote(paths.home)} ${quote(process.execPath)} ${quote(fileURLToPath(new URL('./cursor-hook.js', import.meta.url)))}`;
+  // Through the stable sphinx launcher when available, so package upgrades keep working.
+  const command = launcher
+    ? `SPHINX_HOME=${quote(paths.home)} ${launcher.env}${launcher.command} hook cursor`
+    : `SPHINX_HOME=${quote(paths.home)} ${quote(process.execPath)} ${quote(fileURLToPath(new URL('./cursor-hook.js', import.meta.url)))}`;
   const hooks = [
     { event: 'sessionStart', handler: { command, timeout: 10 } },
     { event: 'postToolUse', handler: { command, timeout: 1800, matcher: '^Shell$' } },
@@ -226,7 +233,10 @@ export async function browserHandoff({ cwd, host, hostSession, checkpointIds, en
 export async function cursorAgentHook({ input = {}, env = process.env, handoff = browserHandoff } = {}) {
   if (env.SPHINX_EVALUATOR === '1') return {};
   const event = input.hook_event_name;
-  if (event === 'sessionStart') return { additional_context: TERMINAL_GUIDANCE, ...(sessionId(input.session_id || input.conversation_id) ? { env: { SPHINX_CURSOR_SESSION: sessionId(input.session_id || input.conversation_id) } } : {}) };
+  if (event === 'sessionStart') {
+    const nudge = await setupNudge(typeof input.cwd === 'string' ? input.cwd : input.workspace_roots?.[0]);
+    return { additional_context: nudge ? `${TERMINAL_GUIDANCE}\n${nudge}` : TERMINAL_GUIDANCE, ...(sessionId(input.session_id || input.conversation_id) ? { env: { SPHINX_CURSOR_SESSION: sessionId(input.session_id || input.conversation_id) } } : {}) };
+  }
   if (!['postToolUse', 'postToolUseFailure'].includes(event) || input.tool_name !== 'Shell') return {};
   try {
     const checkpointIds = cursorCheckpointIds(input);

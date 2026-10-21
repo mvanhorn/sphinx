@@ -1,4 +1,5 @@
-import { access, chmod, lstat, mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, lstat, mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { settingsTarget } from './user-file.js';
 import { constants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -22,6 +23,29 @@ const GATED = new Set(['pre-push', 'pre-commit']);
 const PREPARED = new Set(['post-commit', 'post-merge', 'post-rewrite', 'post-checkout']);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+
+/**
+ * The shell command hooks use to run Sphinx. Prefer the package manager's own
+ * `sphinx` on PATH (an npm/yarn symlink or a pnpm/bun shim): it survives
+ * upgrades, unlike a versioned store path. Node's directory is put first on
+ * PATH so GUI-launched agents without a login PATH still find node. A checkout
+ * without such a shim falls back to absolute node and CLI paths.
+ * Returns shell `env` assignments (placed before any exec) and the `command`.
+ */
+export async function sphinxLauncher(cliPath, env = process.env, execPath = process.execPath) {
+  const real = await realpath(cliPath).catch(() => cliPath);
+  for (const directory of String(env.PATH || '').split(path.delimiter).filter(dir => path.isAbsolute(dir))) {
+    const candidate = path.join(directory, 'sphinx');
+    try {
+      const info = await stat(candidate);
+      if (!info.isFile() || !(info.mode & 0o111)) continue;
+      const matches = await realpath(candidate) === real
+        || (info.size < 64 * 1024 && (await readFile(candidate, 'utf8')).includes('sphinx-understand/bin/sphinx.js'));
+      if (matches) return { env: `PATH=${quote(path.dirname(execPath))}:"$PATH" `, command: quote(candidate) };
+    } catch { /* Not a usable shim. */ }
+  }
+  return { env: '', command: `${quote(execPath)} ${quote(cliPath)}` };
+}
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const AGENTS = ['codex', 'claude', 'pi', 'cursor', 'opencode'];
 
@@ -55,8 +79,7 @@ async function exists(file) {
 
 async function readJson(file, fallback) {
   try {
-    if ((await lstat(file)).isSymbolicLink()) throw new Error(`Refusing to replace symlink: ${file}`);
-    const value = JSON.parse(await readFile(file, 'utf8'));
+    const value = JSON.parse(await readFile((await settingsTarget(file)).path, 'utf8'));
     if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error('expected an object');
     return value;
   } catch (error) {
@@ -66,7 +89,9 @@ async function readJson(file, fallback) {
   }
 }
 
-async function writeJson(file, value) {
+async function writeJson(link, value) {
+  // Write through a dotfiles symlink to its target, atomically, keeping the link.
+  const file = (await settingsTarget(link)).path;
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const mode = await stat(file).then(s => s.mode & 0o777).catch(() => 0o600);
   const temporary = `${file}.${randomUUID()}.tmp`;
@@ -112,20 +137,22 @@ async function sourceBeforeInstall({ repo, cwd, env, manifest }) {
 }
 
 function sourceShell(source) {
+  // git init runs reference-transaction while creating HEAD, before rev-parse
+  // accepts the new repository; Git still exports that repository as GIT_DIR.
   return source.kind === 'path'
     ? `hook_dir=${quote(source.value)}\n`
-    : 'hook_dir=$(git rev-parse --path-format=absolute --git-common-dir) || exit $?\nhook_dir="$hook_dir/hooks"\n';
+    : 'if ! hook_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then\n  if [ -z "${GIT_DIR:-}" ] || [ ! -d "$GIT_DIR" ]; then\n    git rev-parse --git-common-dir >/dev/null\n    exit 128\n  fi\n  hook_dir=$GIT_DIR\nfi\nhook_dir="$hook_dir/hooks"\n';
 }
 
-function hookScript({ event, source, cliPath, home, id }) {
+function hookScript({ event, source, launcher, home, id }) {
   const header = '#!/bin/sh\n# Managed by Sphinx. Existing hooks remain in their original directory.\n';
   if (GATED.has(event)) {
-    return `${header}SPHINX_HOME=${quote(home)} SPHINX_INSTALL_ID=${quote(id)} exec ${quote(process.execPath)} ${quote(cliPath)} hook git ${quote(event)} "$@"\n`;
+    return `${header}SPHINX_HOME=${quote(home)} SPHINX_INSTALL_ID=${quote(id)} ${launcher.env}exec ${launcher.command} hook git ${quote(event)} "$@"\n`;
   }
   if (PREPARED.has(event)) {
     // The existing hook retains streaming stdin and its exit status. Scheduling
     // has no terminal, runs asynchronously, and never gates the Git operation.
-    return `${header}${sourceShell(source)}hook="$hook_dir/${event}"\nstatus=0\nif [ -x "$hook" ]; then\n  "$hook" "$@"\n  status=$?\nfi\nif [ "\${SPHINX_EVALUATOR:-}" != "1" ]; then\n  SPHINX_HOME=${quote(home)} ${quote(process.execPath)} ${quote(cliPath)} prepare </dev/null >/dev/null 2>&1 &\nfi\nexit "$status"\n`;
+    return `${header}${sourceShell(source)}hook="$hook_dir/${event}"\nstatus=0\nif [ -x "$hook" ]; then\n  "$hook" "$@"\n  status=$?\nfi\nif [ "\${SPHINX_EVALUATOR:-}" != "1" ]; then\n  SPHINX_HOME=${quote(home)} ${launcher.env}${launcher.command} prepare </dev/null >/dev/null 2>&1 &\nfi\nexit "$status"\n`;
   }
   // Protocol hooks such as proc-receive must retain streaming stdin/stdout.
   // They exec the prior hook directly rather than buffering input in Node.
@@ -167,7 +194,7 @@ export async function detectAgents({ env = process.env } = {}) {
   return detectedAgents({ paths, env, manifest });
 }
 
-async function prepareAgents({ agents, paths, env, cliPath, manifest }) {
+async function prepareAgents({ agents, paths, env, cliPath, launcher, manifest }) {
   const selected = agents === 'auto'
     ? await detectedAgents({ paths, env, manifest })
     : agents === 'none' ? [] : Array.isArray(agents) ? agents : agents.split(',').map(x => x.trim());
@@ -176,13 +203,13 @@ async function prepareAgents({ agents, paths, env, cliPath, manifest }) {
   for (const name of new Set(selected)) {
     if (['pi', 'cursor', 'opencode'].includes(name)) {
       const prepare = name === 'pi' ? preparePiIntegration : name === 'cursor' ? prepareCursorIntegration : prepareOpenCodeIntegration;
-      result.push(await prepare(paths, { env, cliPath, previous: manifest.agents[name] }));
+      result.push(await prepare(paths, { env, cliPath, launcher, previous: manifest.agents[name] }));
       continue;
     }
     const file = path.join(paths[`${name}Home`], name === 'codex' ? 'hooks.json' : 'settings.json');
     const document = await readJson(file, {});
     if (document.hooks !== undefined && (!document.hooks || typeof document.hooks !== 'object' || Array.isArray(document.hooks))) throw new Error(`Invalid hooks object in ${file}`);
-    const command = `SPHINX_HOME=${quote(paths.home)} ${quote(process.execPath)} ${quote(cliPath)} hook agent ${name}`;
+    const command = `SPHINX_HOME=${quote(paths.home)} ${launcher.env}${launcher.command} hook agent ${name}`;
     const handler = { type: 'command', command, timeout: 10 };
     const hooks = nativeHookSpecs(name, handler);
     for (const { event } of hooks) {
@@ -216,7 +243,8 @@ export async function install({ config, agents = 'auto', repo = false, cwd = pro
   const id = info.id;
   const previous = manifest.installs[id];
   // Validate every selected settings file before mutating any integration.
-  const agentPlans = await prepareAgents({ agents, paths, env, cliPath, manifest });
+  const launcher = await sphinxLauncher(cliPath, env);
+  const agentPlans = await prepareAgents({ agents, paths, env, cliPath, launcher, manifest });
   const scopeValues = await currentConfig(info.scope, cwd, env);
   if (previous && scopeValues.at(-1) !== previous.hookDir) {
     throw new Error('Git hooks changed since Sphinx was installed. Run sphinx uninstall first; your current configuration will be preserved.');
@@ -233,7 +261,7 @@ export async function install({ config, agents = 'auto', repo = false, cwd = pro
   });
   if (directoryState?.isSymbolicLink()) throw new Error(`Refusing to replace a symlinked hook directory: ${entry.hookDir}`);
   const names = await hookNames(entry.source, cwd, env);
-  const scripts = names.map(event => ({ event, content: hookScript({ event, source: entry.source, cliPath, home: paths.home, id }) }));
+  const scripts = names.map(event => ({ event, content: hookScript({ event, source: entry.source, launcher, home: paths.home, id }) }));
   for (const { event, content } of scripts) {
     const file = path.join(entry.hookDir, event);
     const fileState = await lstat(file).catch(error => {

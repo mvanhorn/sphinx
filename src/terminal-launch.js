@@ -10,7 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { getPaths, readJson, writeJson } from './config.js';
 
 const WORKER = fileURLToPath(new URL('./terminal-worker.js', import.meta.url));
-const CLI = fileURLToPath(new URL('../bin/sphinx.js', import.meta.url));
+export const CLI = fileURLToPath(new URL('../bin/sphinx.js', import.meta.url));
 const ID = /^[a-f0-9]{64}$/;
 const TOKEN = /^[a-f0-9-]{36}$/;
 const STARTUP_MS = 30000;
@@ -241,7 +241,17 @@ export async function waitForCheckpointTerminal({ id, env = process.env, timeout
 }
 
 /** Called only inside a terminal. The real CLI owns all answers and receipts. */
-export async function runCheckpointTerminal({ recordFile, token, env = process.env, isTTY = !!process.stdin.isTTY, spawnImpl = spawn, pid = process.pid } = {}) {
+// A window opened just for this check closes when the check exits. Before an
+// unfinished one closes, wait so its last message can be read.
+async function pressEnter(output = process.stdout) {
+  output.write('\nThe check did not finish; your progress is saved. Press Enter to close this window.');
+  const { createInterface } = await import('node:readline');
+  const rl = createInterface({ input: process.stdin });
+  await new Promise(resolve => { rl.once('line', resolve); rl.once('close', resolve); });
+  rl.close();
+}
+
+export async function runCheckpointTerminal({ recordFile, token, env = process.env, isTTY = !!process.stdin.isTTY, spawnImpl = spawn, pid = process.pid, pause = process.stdin.isTTY ? pressEnter : async () => {} } = {}) {
   const home = getPaths(env).home;
   const id = path.basename(recordFile || '', '.json');
   if (!ID.test(id) || !TOKEN.test(token) || path.resolve(recordFile) !== fileFor(id, env)) throw new Error('Invalid checkpoint terminal worker.');
@@ -282,7 +292,9 @@ export async function runCheckpointTerminal({ recordFile, token, env = process.e
     if (Number.isInteger(child.pid)) { running.childPid = child.pid; childWrite = writeJson(recordFile, running).catch(() => {}); }
   });
   await childWrite;
-  const result = { ...running, status: code === 0 ? 'passed' : 'pending', updatedAt: Date.now(), finishedAt: Date.now() };
+  const result = { ...running, status: code === 0 ? 'passed' : code === 3 ? 'skipped' : 'pending', updatedAt: Date.now(), finishedAt: Date.now() };
   if ((await readJson(recordFile, null))?.token === token) await writeJson(recordFile, result);
+  // Recorded first, so a waiting Git operation is not held by this prompt.
+  if (result.status === 'pending' && isTTY) await pause();
   return { status: result.status, code };
 }

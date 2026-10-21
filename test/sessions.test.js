@@ -504,3 +504,76 @@ test('transport-reported tokens and cost accumulate on the checkpoint and reach 
   assert.ok(Math.abs(state.tokens.cost - 0.003) < 1e-9);
   assert.deepEqual(Object.keys(state.usage).sort(), ['calls', 'limit'], 'usage keeps its call-count shape');
 });
+
+test('reviewer and grading calls are tagged with their purpose in the usage ledger', async t => {
+  const { reportUsage, withUsageLedger, readUsage } = await import('../src/usage.js');
+  const { store, env, config } = await fixture(t, {
+    generate: async () => { reportUsage({ inputTokens: 10, outputTokens: 2, provider: 'openrouter', model: 'openrouter/free' }); return { questions: [structuredClone(q)] }; },
+    grade: async () => { reportUsage({ inputTokens: 5, outputTokens: 1, provider: 'claude', model: 'haiku' }); return { verdict: 'correct', feedback: 'Correct: the repeated insert can duplicate it.', followUp: null }; },
+  });
+  await withUsageLedger(env, async () => {
+    await store.ensure(snapshot, config); await store.start(snapshot.id, config);
+    await store.answer(snapshot.id, 'Yes: it inserts every time.', config);
+  });
+  assert.deepEqual(readUsage({ env }).map(entry => [entry.purpose, entry.tier]), [['review', 'free'], ['grading', 'plan']]);
+});
+
+test('a documentation-only change passes with no model call, before any page opens', async t => {
+  let calls = 0;
+  const { store, config } = await fixture(t, { generate: async () => { calls++; return { questions: [q] }; } });
+  const docs = { ...snapshot, id: 'd'.repeat(64), files: ['README.md', 'docs/guide.mdx', 'LICENSE'] };
+  await store.ensure(docs, config);
+  assert.equal(await store.passTrivial(docs.id, config), true);
+  const state = store.public(await store.read(docs.id));
+  assert.equal(state.status, 'passed');
+  assert.equal(state.noQuestionReason, 'Documentation-only change.');
+  assert.equal(await store.approved(docs, config), true);
+  assert.equal(calls, 0);
+  const mixed = { ...snapshot, id: 'e'.repeat(64), files: ['README.md', 'src/order.js'] };
+  await store.ensure(mixed, config);
+  assert.equal(await store.passTrivial(mixed.id, config), false, 'Any code file needs a real check');
+});
+
+test('a small change the reviewer finds trivial passes with its reason; a larger one never passes with zero questions', async t => {
+  const review = { version: 1, summary: 'Renamed a local variable.', evidence: 'x', evidencePaths: ['src/order.js'], toolCalls: 1, compactions: 0 };
+  const small = await fixture(t, { generate: async (_s, _c, { beforeCall }) => { await beforeCall(); return { questions: [], noQuestionReason: 'Only renames a local variable; behavior is unchanged.', review }; } });
+  await small.store.ensure(snapshot, small.config);
+  const passed = await small.store.start(snapshot.id, small.config);
+  assert.equal(passed.status, 'passed');
+  assert.match(passed.noQuestionReason, /renames a local variable/);
+  const big = { ...snapshot, id: 'f'.repeat(64), stats: { additions: 900, deletions: 300, files: 30 } };
+  const large = await fixture(t, { generate: async (_s, _c, { beforeCall }) => { await beforeCall(); return { questions: [], noQuestionReason: 'Looks fine.', review }; } });
+  await large.store.ensure(big, large.config);
+  await assert.rejects(large.store.start(big.id, large.config), /no grounded questions/);
+  assert.notEqual((await large.store.read(big.id)).status, 'passed');
+  // With stated preferences, a larger change entirely in a skipped area may pass.
+  const styled = { ...big, id: 'e'.repeat(64), projectContext: { path: '.sphinxcontext.md', text: '', preferences: "- Don't ask me about styling.", hash: 'p' } };
+  const skipped = await fixture(t, { generate: async (_s, _c, { beforeCall }) => { await beforeCall(); return { questions: [], noQuestionReason: 'Only CSS changes, which your preferences skip.', review }; } });
+  await skipped.store.ensure(styled, skipped.config);
+  assert.equal((await skipped.store.start(styled.id, skipped.config)).status, 'passed');
+});
+
+test('each question is scored once: first-try correct, a miss after a wrong answer or explanation, never for a dispute', async t => {
+  const { readStats } = await import('../src/stats.js');
+  const follow = { ...q, id: 'follow', prompt: 'After a restart, can the same request run again? Why?' };
+  const verdicts = ['incorrect', 'correct'];
+  const { store, config, env } = await fixture(t, {
+    generate: async (_s, _c, { beforeCall }) => { await beforeCall(); return { questions: [q, { ...q, id: 'second', prompt: 'Does a second worker share the guard? Why?' }], review: { version: 1, summary: 's', evidence: 'x', evidencePaths: ['src/order.js'], toolCalls: 1, compactions: 0 } }; },
+    grade: async request => { await request.beforeCall(); const verdict = request.dispute ? 'ambiguous' : verdicts.shift() ?? 'correct'; return { verdict, feedback: verdict === 'correct' ? '' : 'No.', followUp: verdict === 'incorrect' ? follow : null }; },
+  });
+  const medium = { ...snapshot, id: '9'.repeat(64), stats: { additions: 200, deletions: 40, files: 6 } };
+  await store.ensure(medium, config);
+  await store.start(medium.id, config);
+  await store.answer(medium.id, 'It is ambiguous.', config, { dispute: true });
+  await store.answer(medium.id, 'Wrong idea.', config);
+  await store.answer(medium.id, 'Right idea.', config);
+  await store.answer(medium.id, 'Right again.', config);
+  const stats = await readStats(medium.repoRoot, env);
+  assert.deepEqual([stats.answered, stats.firstTry, stats.completed], [2, 1, 1], 'Question 1 missed then recovered counts once as a miss; question 2 first-try');
+});
+
+test('a documentation check never blocks on a check that background preparation is holding', async t => {
+  const { store, config } = await fixture(t);
+  await store.ensure(snapshot, config);
+  assert.equal(await store.passTrivial(snapshot.id, config, snapshot), false, 'Code changes are decided without taking the lock');
+});

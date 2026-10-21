@@ -1,7 +1,7 @@
 {
   "name": "sphinx-understand",
-  "version": "0.1.0",
-  "description": "Outsource your thinking, not your understanding. A comprehension checkpoint for agent-assisted development.",
+  "version": "0.1.13",
+  "description": "You can outsource your thinking, but not your understanding. A comprehension checkpoint for agent-assisted development.",
   "homepage": "https://github.com/parthh01/sphinx#readme",
   "repository": {
     "type": "git",
@@ -21,12 +21,15 @@
     "test": "node scripts/run-suite.mjs",
     "check": "node --check bin/sphinx.js && node scripts/run-suite.mjs",
     "start": "node bin/sphinx.js",
-    "eval": "node eval/run.js"
+    "eval": "node eval/run.js",
+    "postinstall": "node scripts/postinstall.js"
   },
   "files": [
     "bin",
     "src",
+    "scripts/postinstall.js",
     "docs",
+    "!docs/demo.gif",
     "eval/RESULTS.md",
     "eval/fixtures/known-false-negatives.json",
     "examples",
