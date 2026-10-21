@@ -79,7 +79,7 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
   store: providedStore, readConfig = loadConfig, revalidate = revalidateSnapshot,
   reserve = claimCheckpointDialog, release = finishCheckpointDialog, waitForExisting = waitForCheckpointTerminal,
   openBrowser = openQuestionnaireBrowser, notify = notifyDesktop, output = line => process.stderr.write(`${line}\n`), logOverride = recordOverride, findPlans = planProviders,
-  loadView = loadChangeView, checkUpdate = updateStatus, planUpdate = updatePlan, startUpdate = scheduleUpdate,
+  loadView = loadChangeView, checkUpdate = updateStatus, planUpdate = updatePlan, startUpdate = scheduleUpdate, watchMs = 1000,
 } = {}) {
   const token = randomBytes(32).toString('base64url'), nonce = randomBytes(24).toString('base64');
   let server, origin, url, opened = false, closed = false, active, skip, resolver, sequence = 0, waitingGit = false;
@@ -141,13 +141,23 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
     const event = `data: ${JSON.stringify(state)}\n\n`;
     for (const stream of streams) writeEvent(stream, event);
   };
-  const waitForAction = (next, allowed) => new Promise((resolve, reject) => {
+  // `watch` polls for work done outside this page; a truthy result ends the wait as { action: 'saved' }.
+  const waitForAction = (next, allowed, watch) => new Promise((resolve, reject) => {
     active.signal.throwIfAborted();
-    const onAbort = () => { resolver = undefined; reject(active.signal.reason || cancelled()); };
-    const cleanup = () => active?.signal.removeEventListener('abort', onAbort);
+    const polling = new AbortController();
+    const onAbort = () => { polling.abort(); resolver = undefined; reject(active.signal.reason || cancelled()); };
+    const cleanup = () => { polling.abort(); active?.signal.removeEventListener('abort', onAbort); };
     resolver = { allowed, resolve: value => { cleanup(); resolver = undefined; resolve(value); }, reject: error => { cleanup(); resolver = undefined; reject(error); } };
     active.signal.addEventListener('abort', onAbort, { once: true });
     publish(next);
+    if (watch) (async () => {
+      const current = resolver;
+      while (!polling.signal.aborted) {
+        await delay(watchMs, undefined, { signal: polling.signal });
+        const saved = await watch().catch(() => null);
+        if (saved && resolver === current) { current.resolve({ action: 'saved', visible: saved }); return; }
+      }
+    })().catch(() => {});
   });
   const headers = {
     'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
@@ -418,7 +428,19 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
         showQuestion(visible); refreshEvidence(request.id);
         // The page opened in a background tab; say once that questions are ready.
         if (!notified) { notified = true; notify({ title: 'Sphinx needs your answers', message: [repoName || path.basename(request.repoRoot), String(session.snapshot.target?.ref || '').replace(/^refs\/heads\//, '')].filter(Boolean).join(' → '), env: operationEnv }); }
-        const action = await waitForAction({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'question', ...(visible.browserError ? { error: visible.browserError } : {}) }, ['answer', 'learn', 'dispute']);
+        // Answers can also arrive from sphinx answer or a terminal check. Follow
+        // the saved session so this page, and the Git operation waiting on it, keep up.
+        const shown = visible;
+        const action = await waitForAction({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'question', ...(visible.browserError ? { error: visible.browserError } : {}) }, ['answer', 'learn', 'dispute'], async () => {
+          const saved = store.public(await store.read(request.id));
+          return saved.status === 'passed' || saved.progress.completed !== shown.progress.completed || saved.question?.id !== shown.question?.id ? saved : null;
+        });
+        if (action.action === 'saved') {
+          visible = action.visible;
+          if (visible.feedback && visible.feedback !== shown.feedback) say({ role: 'sphinx', kind: 'feedback', text: visible.feedback });
+          await refreshScore(request.repoRoot, operationEnv).catch(() => {});
+          continue;
+        }
         try {
           await validate(session.snapshot, config);
           // Type the grader's feedback into the conversation as it streams.
