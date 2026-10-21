@@ -435,7 +435,8 @@ test('picking a model during the questions grades with it from then on, and can 
 test('picking a model mid-review stops that run and restarts the review on the new model', async t => {
   const f = await fixture(t, { plans: ['claude'], generate: async (n, options) => {
     await options.beforeCall();
-    if (n === 1) await new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }));
+    // The pick can land while beforeCall saves; an abort listener added after that never fires.
+    if (n === 1) await new Promise((_, reject) => { options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }); if (options.signal.aborted) reject(options.signal.reason); });
     return { questions: [q] };
   } });
   f.present();
