@@ -179,7 +179,8 @@ function render(state){
   for(const choice of state.question.choices||[]){const li=document.createElement('li');li.textContent=choice;$('choices').append(li);}
   $('choices').hidden=!(state.question.choices||[]).length;
   const key=state.id+':'+state.question.id;
-  if(lastQuestion!==key){$('response').value='';lastQuestion=key;resize();if(disputing)setDispute(false);}
+  // A saved, ungraded response (for example after a provider failure) is restored when the question is first shown.
+  if(lastQuestion!==key){const draft=state.draft;$('response').value=draft?.text||'';lastQuestion=key;if(disputing!==(draft?.kind==='dispute')){setDispute(!disputing);text('error',state.error);}resize();}
  }
  const graded=[...messages].reverse().find(item=>item.role==='human'&&item.status==='graded');
  if(graded&&lastGraded!==graded.id){lastGraded=graded.id;$('response').value='';resize();if(disputing)setDispute(false);}

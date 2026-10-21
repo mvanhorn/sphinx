@@ -299,3 +299,19 @@ test('unavailable change data or evidence keeps the question answerable with an 
   p.update({ ...question, sequence: 2, phase: 'passed', change: { status: 'unavailable' } });
   assert.equal(p.nodes.evidence.hidden, true);
 });
+
+test('a saved ungraded answer or dispute is restored when its question opens, keeping the error visible', () => {
+  const p = page();
+  p.update({ ...question, draft: { kind: 'answer', text: 'Saved <b>answer</b>.' } });
+  assert.equal(p.nodes.response.value, 'Saved <b>answer</b>.');
+  assert.equal(p.nodes.form.classList.contains('disputing'), false);
+  const d = page();
+  d.update({ ...question, error: 'OpenRouter HTTP 429.', draft: { kind: 'dispute', text: 'It assumes a unique index.' } });
+  assert.equal(d.nodes.response.value, 'It assumes a unique index.');
+  assert.equal(d.nodes.submit.textContent, 'Send dispute');
+  assert.equal(d.nodes.error.textContent, 'OpenRouter HTTP 429.');
+  // Later updates for the same question never overwrite what the human is typing.
+  d.nodes.response.value = 'Edited.';
+  d.update({ ...question, sequence: 2, draft: { kind: 'dispute', text: 'It assumes a unique index.' } });
+  assert.equal(d.nodes.response.value, 'Edited.');
+});

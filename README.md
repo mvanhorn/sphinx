@@ -142,7 +142,7 @@ sphinx config --max-model-calls 30        # optional cap per check (1–100)
 sphinx config --preset openrouter-value --allow-paid
 ```
 
-Context size, output tokens, and review time are always capped. Provider failures never retry automatically. For routing thresholds, model tables, pricing, and every limit, see [configuration and cost](docs/configuration.md).
+Context size, output tokens, and review time are always capped. Transient provider errors (rate limits, an OpenRouter route without a JSON-schema provider, brief outages) are retried up to three times with backoff; an answer that still could not be graded is saved for when you resume. For routing thresholds, model tables, pricing, and every limit, see [configuration and cost](docs/configuration.md).
 
 Version 0.1 checks local commits and pushes only. It does not cover web merges, CI-required checks, or deployments. It cannot read binary file contents, and it tests understanding rather than auditing the code. The [evaluation results](eval/RESULTS.md) record question quality, grading errors, and costs on synthetic changes. They do not certify arbitrary repositories.
 

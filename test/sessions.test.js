@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DEFAULT_CONFIG, writeJson } from '../src/config.js';
-import { createSessionStore, sessionFile } from '../src/sessions.js';
+import { createSessionStore, savedDraft, sessionFile } from '../src/sessions.js';
 import { OpenRouterError } from '../src/openrouter.js';
 
 const q={id:'retry',concept:'idempotency',prompt:'Can a repeated request duplicate the operation? Give the cause.',choices:['Yes','No'],expectedAnswer:'Yes: no deduplication.',rationale:'The insert happens on every call.',evidence:[{path:'src/order.js',reason:'An unconditional insert.'}]};
@@ -503,4 +503,32 @@ test('transport-reported tokens and cost accumulate on the checkpoint and reach 
   assert.deepEqual({ input: state.tokens.input, output: state.tokens.output }, { input: 1500, output: 300 });
   assert.ok(Math.abs(state.tokens.cost - 0.003) < 1e-9);
   assert.deepEqual(Object.keys(state.usage).sort(), ['calls', 'limit'], 'usage keeps its call-count shape');
+});
+
+test('a failed grade keeps the answer or dispute text for the same question until a grade is saved', async t => {
+  let attempt=0;
+  const {store,config}=await fixture(t,{grade:async()=>{
+    if(++attempt<=2) throw new OpenRouterError('OpenRouter HTTP 429 (code: 429). Provider or account rate limit reached.', {status:429});
+    return {verdict:'correct',feedback:'Correct.',followUp:null};
+  }});
+  await store.ensure(snapshot,config); await store.start(snapshot.id,config);
+  await assert.rejects(store.answer(snapshot.id,'  Yes: it inserts every time.  ',config), error => {
+    assert.equal(error.code,'OPENROUTER_PROVIDER_ERROR'); assert.equal(error.status,429);
+    assert.match(error.message,/Your answer was saved and is offered again when you resume this question/);
+    return true;
+  });
+  let saved=await store.read(snapshot.id);
+  assert.deepEqual(savedDraft(saved),{kind:'answer',text:'Yes: it inserts every time.'});
+  assert.equal(JSON.stringify(store.public(saved)).includes('inserts every time'),false,'The draft stays out of agent-visible state');
+  await assert.rejects(store.answer(snapshot.id,'The question assumes no unique index.',config,{dispute:true}), /Your dispute reason was saved/);
+  assert.deepEqual(savedDraft(await store.read(snapshot.id)),{kind:'dispute',text:'The question assumes no unique index.'});
+  assert.equal((await store.answer(snapshot.id,'Yes: it inserts every time.',config)).status,'passed');
+  saved=await store.read(snapshot.id);
+  assert.equal(saved.draft,undefined); assert.equal(savedDraft(saved),null);
+});
+
+test('a saved draft is not offered for a different question', () => {
+  const session={status:'active',index:0,questions:[{id:'next'}],draft:{questionId:'retry',kind:'answer',text:'Old.'}};
+  assert.equal(savedDraft(session),null);
+  assert.deepEqual(savedDraft({...session,questions:[{id:'retry'}]}),{kind:'answer',text:'Old.'});
 });

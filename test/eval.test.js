@@ -219,16 +219,17 @@ test('transfer reference checks recognize literal HTML classes but do not invent
   assert.deepEqual(unknownSourceSelectors(question, evidence), ['.alert']);
 });
 
-test('a provider error stops the live run without probing the remaining cases', async () => {
+test('a provider error that persists through retries stops the live run without probing the remaining cases', async () => {
   let requests = 0;
-  const report = await runEvaluation({ cases: CASES.slice(0, 2), live: true, apiKey: 'fake', maxCalls: 20, delayMs: 0,
+  const report = await runEvaluation({ cases: CASES.slice(0, 2), live: true, apiKey: 'fake', maxCalls: 20, delayMs: 0, sleep: async () => {},
     fetchImpl: async () => { requests++; return new Response(JSON.stringify({ error: { code: 429, message: 'UNTRUSTED_ERROR_CONTENT' }, usage: { cost: 0.0001 } }), { status: 429 }); },
   });
-  assert.equal(requests, 1); assert.equal(report.usage.calls, 1);
+  // A 429 is transient: the transport retries it three times, each a metered request.
+  assert.equal(requests, 4); assert.equal(report.usage.calls, 4);
   assert.equal(report.cases.length, 1);
   assert.equal(report.stopped, 'OPENROUTER_PROVIDER_ERROR');
   assert.equal(report.cases[0].error.code, 'OPENROUTER_PROVIDER_ERROR');
-  assert.equal(report.usage.reportedCostUsd, 0.0001);
+  assert.ok(Math.abs(report.usage.reportedCostUsd - 0.0004) < 1e-12, "Each metered attempt reports its cost");
   assert.equal(report.usage.responses[0].errorMessage, 'UNTRUSTED_ERROR_CONTENT', 'Synthetic eval diagnostics are bounded; product errors remain sanitized separately');
 });
 

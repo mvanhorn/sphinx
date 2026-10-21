@@ -1,6 +1,6 @@
 import { loadConfig, policyHash } from './config.js';
 import { revalidateSnapshot } from './git.js';
-import { createSessionStore } from './sessions.js';
+import { createSessionStore, savedDraft } from './sessions.js';
 import { listPresentations, claimPresentation } from './presentations.js';
 import { claimCheckpointDialog, finishCheckpointDialog } from './terminal-launch.js';
 import { modelUsageText } from './usage.js';
@@ -8,7 +8,7 @@ import { modelUsageText } from './usage.js';
 const LEARN_REQUEST = 'I do not know. Explain this concept and give me a different scenario to apply it to.';
 const ACTIONS = ['answer', 'learn', 'dispute', 'pause'];
 
-function formFor(state, notice, repoRoot) {
+function formFor(state, notice, repoRoot, draft) {
   const question = state.question;
   const lines = [
     `Sphinx: ${state.progress.completed + 1} of ${state.progress.total} concepts`,
@@ -26,8 +26,8 @@ function formFor(state, notice, repoRoot) {
     requestedSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', title: 'Action', enum: ACTIONS, default: 'answer' },
-        response: { type: 'string', title: 'Your answer or dispute reason', description: 'Required for answer and dispute. Leave blank for learn or pause.', maxLength: 8000 },
+        action: { type: 'string', title: 'Action', enum: ACTIONS, default: draft?.kind ?? 'answer' },
+        response: { type: 'string', title: 'Your answer or dispute reason', description: 'Required for answer and dispute. Leave blank for learn or pause.', maxLength: 8000, ...(draft ? { default: draft.text } : {}) },
       },
       required: ['action'],
     },
@@ -121,7 +121,7 @@ export async function runNativeCheckpoint({
       while (state.status !== 'passed') {
         if (!state.question?.id) throw new Error('The assessment has no current question.');
         const expectedQuestionId = state.question.id;
-        const response = formResponse(await elicit(formFor(state, notice, session.snapshot.repoRoot)));
+        const response = formResponse(await elicit(formFor(state, notice, session.snapshot.repoRoot, savedDraft(await store.read(request.id)))));
         signal?.throwIfAborted();
         if (response.invalid) {
           if (++invalidResponses >= 3) throw new Error('The form did not contain a valid response.');

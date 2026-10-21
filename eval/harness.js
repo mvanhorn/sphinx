@@ -192,7 +192,7 @@ export async function canonicalEvidence(snapshot, paths, workspace) {
   return evidence;
 }
 
-export async function runCase(fixture, { config, budget, live = false, apiKey, probes = 'both', fetchImpl = fetch } = {}) {
+export async function runCase(fixture, { config, budget, live = false, apiKey, probes = 'both', fetchImpl = fetch, sleep } = {}) {
   const data = await createFixture(fixture, config);
   const route = selectRoute(data.snapshot, config), runtime = evaluatorConfig(config, route);
   const startCalls = budget.state.calls, responseStart = budget.state.responses.length;
@@ -220,14 +220,14 @@ export async function runCase(fixture, { config, budget, live = false, apiKey, p
       const entry = audit || grade ? { prompt: diagnosticCopy(args.prompt, apiKey), schema: diagnosticCopy(args.schema, apiKey), result: null } : null;
       if (entry) (audit ? trace.audits : trace.grades).push(entry);
       try {
-        const result = await callOpenRouter({ ...args, fetchImpl: meteredFetch(fetchImpl, budget) });
+        const result = await callOpenRouter({ ...args, sleep, fetchImpl: meteredFetch(fetchImpl, budget) });
         if (entry) entry.result = diagnosticCopy(result, apiKey);
         return result;
       } catch (error) { if (entry) entry.error = diagnosticCopy(safeError(error), apiKey); throw error; }
     };
     const evaluator = live ? createEvaluator({ env,
       openRouter: auditTransport,
-      openRouterTurn: args => callOpenRouterTurn({ ...args, fetchImpl: meteredFetch(fetchImpl, budget) }),
+      openRouterTurn: args => callOpenRouterTurn({ ...args, sleep, fetchImpl: meteredFetch(fetchImpl, budget) }),
     }) : scriptedEvaluator(fixture, env);
     const space = await createReviewWorkspace(data.snapshot, { ...runtime, toolResultBytes: Math.min(config.toolResultBytes, Math.floor(config.maxContextBytes / 32)) }, { env });
     const execute = space.execute.bind(space);
@@ -286,7 +286,7 @@ export async function runCase(fixture, { config, budget, live = false, apiKey, p
   return diagnosticCopy(report, apiKey);
 }
 
-export async function runEvaluation({ cases = CASES, config = structuredClone(DEFAULT_CONFIG), maxCalls = 60, maxCost, live = false, apiKey, probes = 'both', fetchImpl, onCase, delayMs = live ? 1000 : 0 } = {}) {
+export async function runEvaluation({ cases = CASES, config = structuredClone(DEFAULT_CONFIG), maxCalls = 60, maxCost, live = false, apiKey, probes = 'both', fetchImpl, onCase, delayMs = live ? 1000 : 0, sleep } = {}) {
   validateConfig(config);
   if (!['both', 'generated', 'canonical'].includes(probes)) throw new Error('probes must be both, generated, or canonical.');
   if (live && !apiKey) throw new Error('Live evaluations require an OpenRouter key; no requests were made.');
@@ -297,7 +297,7 @@ export async function runEvaluation({ cases = CASES, config = structuredClone(DE
     costCaveat: 'Costs are provider-reported, may be absent, and already-incurred requests can exceed max-cost by one request. Missing cost stops subsequent requests when max-cost is set.' };
   for (const fixture of cases) {
     if (budget.state.calls >= maxCalls || (maxCost !== undefined && (budget.state.reportedCostUsd >= maxCost || budget.state.missingCostReports))) { report.stopped = 'run-budget'; break; }
-    const result = await runCase(fixture, { config, budget, live, apiKey, probes, fetchImpl });
+    const result = await runCase(fixture, { config, budget, live, apiKey, probes, fetchImpl, sleep });
     report.cases.push(result); await onCase?.(result, diagnosticCopy({ ...report, status: 'running' }, apiKey));
     if (result.stopped) { report.stopped = result.stopped; break; }
   }

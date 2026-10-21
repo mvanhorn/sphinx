@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { loadConfig, policyHash } from './config.js';
 import { revalidateSnapshot } from './git.js';
-import { createSessionStore } from './sessions.js';
+import { createSessionStore, savedDraft } from './sessions.js';
 import { prepareInteractiveCheck } from './check-recovery.js';
 import { claimCheckpointDialog, finishCheckpointDialog, waitForCheckpointTerminal } from './terminal-launch.js';
 import { browserPage } from './browser-page.js';
@@ -282,7 +282,8 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
       while (visible.status !== 'passed') {
         localSignal.throwIfAborted();
         showQuestion(visible); refreshEvidence(request.id);
-        const action = await waitForAction({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'question', ...(visible.browserError ? { error: visible.browserError } : {}) }, ['answer', 'learn', 'dispute']);
+        const draft = savedDraft(await store.read(request.id));
+        const action = await waitForAction({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'question', ...(draft ? { draft } : {}), ...(visible.browserError ? { error: visible.browserError } : {}) }, ['answer', 'learn', 'dispute']);
         try {
           await validate(session.snapshot, config);
           // Type the grader's feedback into the conversation as it streams.

@@ -12,7 +12,7 @@ import { install, uninstall, doctor, dispatchHook, installedAgents, detectAgents
 import { activateIntegrations } from './activation.js';
 import { checkbox } from './checkbox.js';
 import { agentHook } from './agent.js';
-import { createSessionStore } from './sessions.js';
+import { createSessionStore, savedDraft } from './sessions.js';
 import { prepareInteractiveCheck } from './check-recovery.js';
 import { parseRoute } from './routing.js';
 import { createTerminal, withProgress } from './terminal.js';
@@ -385,7 +385,10 @@ async function checkCommand(values) {
     if (!state) return 1;
     while (state.status !== 'passed') {
       printSession(state, terminal);
-      const answer = (await ask('\nYour answer: ')).trim();
+      const draft = savedDraft(await store.read(session.id));
+      if (draft) terminal.note(`Your last ${draft.kind === 'dispute' ? 'dispute' : 'answer'} was not graded and is saved: ${draft.text}\nPress Enter to send it again, or type a new response.`);
+      const typed = (await ask('\nYour answer: ')).trim();
+      const answer = typed || (draft ? (draft.kind === 'dispute' ? `/dispute ${draft.text}` : draft.text) : '');
       if (answer === '/quit') { terminal.note('Progress saved. Run sphinx check when you are ready to continue.'); return 1; }
       if (!answer) continue;
       const dispute = answer.startsWith('/dispute '), learn = answer === '/learn';
