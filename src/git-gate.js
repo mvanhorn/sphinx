@@ -96,7 +96,7 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
       const old = await listRequests({ cwd: request.repoRoot, host: request.host, hostSession: request.hostSession, env });
       for (const previous of old.filter(item => item.id === request.id)) await claim(previous, { env });
     }
-    if (requests.length) output('Sphinx: Git is waiting for your answers in the local Sphinx questionnaire. It will continue automatically after you pass. Do not start another copy of this Git operation.');
+    if (requests.length) output('Sphinx: Git is waiting for your answers in the local Sphinx questionnaire. After you pass, confirm whether this Git operation should continue. Do not start another copy of this Git operation.');
     const interviewEnv = interviewEnvironment(cwd, env);
     if (requests.length) watch = setInterval(async () => {
       if (checking || watcher.signal.aborted) return;
@@ -135,6 +135,10 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
         return 1;
       }
       if (result?.status === 'skipped') { skipped.add(requests[index].id); output('Sphinx: understanding check skipped for this push and logged.'); continue; }
+      if (result?.status === 'stopped') {
+        output('Sphinx: you passed and stopped this Git operation. Understanding is saved; the operation did not go through. Change the code if you do not want the same change to land, then run the Git command again.');
+        return 1;
+      }
       if (result?.status !== 'passed') {
         output('Sphinx: the understanding check is incomplete, cancelled, or timed out. This Git operation was stopped; progress is saved.');
         return 1;

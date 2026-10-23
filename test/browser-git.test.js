@@ -72,6 +72,17 @@ async function fixture(t) {
     child.output = () => stderr;
     return child;
   };
+  const until = async (child, url, phase) => {
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      const state = await (await fetch(`${url}/state`)).json();
+      if (state.phase === phase) return state;
+      assert.ok(!['error', 'recovery'].includes(state.phase) || phase === state.phase, JSON.stringify(state));
+      if (child.exitCode !== null || child.signalCode !== null) assert.fail(`Git exited before ${phase}: ${JSON.stringify(await child.finished)}`);
+      await delay(20);
+    }
+    assert.fail(`Browser ${phase} did not become ready: ${child.output()}`);
+  };
   const question = async child => {
     const deadline = Date.now() + 20000; let url;
     while (Date.now() < deadline) {
@@ -90,7 +101,7 @@ async function fixture(t) {
     'Content-Type': 'application/json', Origin: new URL(url).origin, 'X-Sphinx-Token': new URL(url).pathname.slice(1),
   }, body: JSON.stringify({ id: state.id, revision: state.revision, action, ...(action === 'answer' ? { questionId: state.question.id, response } : {}) }) });
   const hooks = async () => (await readFile(env.SPHINX_FIXTURE_HOOKS, 'utf8')).trim().split('\n');
-  return { repo, env, app, git, bare, startPush, question, submit, hooks, children };
+  return { repo, env, app, git, bare, startPush, question, until, submit, hooks, children };
 }
 
 test('actual default browser hook continues one original push after direct fixture input, while Pause stops a changed push', { timeout: 60000 }, async t => {
@@ -105,6 +116,8 @@ test('actual default browser hook continues one original push after direct fixtu
   assert.match(first.output(), /No application was brought to the foreground/);
   const answer = await f.submit(page, 'answer', 'No. Set membership returns before another insertion in the same process.');
   assert.equal(answer.status, 202);
+  const consent = await f.until(first, page.url, 'consent');
+  assert.equal((await f.submit({ url: page.url, state: consent }, 'proceed')).status, 200);
   const passed = await first.finished;
   assert.equal(passed.code, 0, passed.stderr);
   assert.match(passed.stderr, /Continuing this Git operation/);
@@ -137,7 +150,9 @@ test('a check passed with sphinx answer while the browser page waits lets the sa
   const push = f.startPush(), page = await f.question(push);
   const answered = JSON.parse((await exec(process.execPath, [CLI, 'answer', page.state.id, '--text', 'No. Set membership returns before another insertion in the same process.', '--json'], { cwd: f.repo, env: f.env, timeout: 20000 })).stdout);
   assert.equal(answered.status, 'passed');
-  const passed = await Promise.race([push.finished, delay(15000).then(() => assert.fail(`The push kept waiting after the CLI pass: ${push.output()}`))]);
+  const consent = await f.until(push, page.url, 'consent');
+  assert.equal((await f.submit({ url: page.url, state: consent }, 'proceed')).status, 200);
+  const passed = await Promise.race([push.finished, delay(15000).then(() => assert.fail(`The push kept waiting after continue: ${push.output()}`))]);
   assert.equal(passed.code, 0, passed.stderr); assert.match(passed.stderr, /Continuing this Git operation/);
   assert.equal(await f.bare('rev-parse', 'refs/heads/main'), head);
   assert.equal(f.children.length, 1); assert.deepEqual(await f.hooks(), ['pre-push']);

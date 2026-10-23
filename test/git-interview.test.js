@@ -27,6 +27,8 @@ test('a concurrent launch lock reuses its existing interview and terminal passed
   assert.deepEqual(result, { status: 'passed', id }); assert.equal(calls, 2); assert.equal(waits, 1);
   const cached = await runGitCheckpointTerminal({ ...options, launch: async () => ({ status: 'passed' }), waitForResult: () => assert.fail('must not wait again') });
   assert.deepEqual(cached, { status: 'passed', id });
+  const stopped = await runGitCheckpointTerminal({ ...options, launch: async () => ({ status: 'stopped' }), waitForResult: () => assert.fail('must not wait after stop') });
+  assert.deepEqual(stopped, { status: 'stopped', id });
 });
 
 test('CI, SSH, missing Linux display, and evaluator contexts fail immediately without opening a terminal', async () => {
@@ -43,9 +45,9 @@ test('launch failures, cancellation, missing statuses, and unfinished interviews
   }
   const failed = await runGitCheckpointTerminal({ ...options, launch: async () => { throw new Error('PRIVATE ERROR'); } });
   assert.equal(failed.status, 'unavailable'); assert.doesNotMatch(JSON.stringify(failed), /PRIVATE ERROR/);
-  for (const status of ['pending', 'unavailable', 'interrupted', null, 'unknown']) {
+  for (const status of ['pending', 'unavailable', 'interrupted', 'stopped', null, 'unknown']) {
     const result = await runGitCheckpointTerminal({ ...options, launch: async () => ({ status: 'opened' }), waitForResult: async () => status });
-    assert.equal(result.status, ['pending', 'unavailable', 'interrupted'].includes(status) ? status : 'interrupted');
+    assert.equal(result.status, ['pending', 'unavailable', 'interrupted', 'stopped'].includes(status) ? status : 'interrupted');
   }
 });
 

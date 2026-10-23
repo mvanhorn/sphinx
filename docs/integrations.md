@@ -116,6 +116,7 @@ These are for a person or a test harness. A coding agent must not answer on your
 | Git is waiting and no page opened | Open the `Sphinx questionnaire:` URL that Git printed. |
 | You closed the tab | Git keeps waiting. Reopen the same URL until the 25-minute deadline. |
 | You paused, the deadline passed, or the host cancelled the shell | Progress is saved. Run the Git command once more, or `sphinx check` first. |
+| You passed and chose Stop | The pass is kept. This Git operation does not go through. Change the code if you do not want the same change to land, then run the Git command again. |
 | A native form was cancelled or never appeared | Run `sphinx check` in a terminal. In Codex, see the approval policy note above. |
 | The review failed before questions appeared | The page offers to continue from saved work. From a terminal: `sphinx check --id <id>`, or `--retry-review` for a failed, questionless review. See [limits](configuration.md#model-calls-tokens-and-limits). |
 | The check keeps coming back after you passed | Something changed: code, destination base, policy, ignore rules, context, or reviewer route. Completion also expires after 24 hours. |

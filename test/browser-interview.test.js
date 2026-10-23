@@ -37,7 +37,13 @@ async function fixture(t, { generate, grade, maxModelCalls = 20, validate = asyn
     assert.equal(interview.state.phase, phase, JSON.stringify(interview.state)); return interview.state;
   };
   const post = async (action, extra = {}, selected = interview.state, headers = {}) => fetch(`${interview.url}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(interview.url).origin, 'X-Sphinx-Token': new URL(interview.url).pathname.slice(1), ...headers }, body: JSON.stringify({ id: selected.id, revision: selected.revision, action, ...(['answer', 'learn', 'dispute'].includes(action) ? { questionId: selected.question.id } : {}), ...extra }) });
-  return { env, config, snapshot, store, interview, request, present, waitFor, post, controller, generated: () => generated, graded: () => graded, opened: () => opened, output };
+  const confirm = async (action = 'proceed') => {
+    await waitFor('consent');
+    const response = await post(action);
+    assert.equal(response.status, 200, await response.clone().text());
+    return response;
+  };
+  return { env, config, snapshot, store, interview, request, present, waitFor, post, confirm, controller, generated: () => generated, graded: () => graded, opened: () => opened, output };
 }
 
 test('browser launch uses only macOS background open and never activates or minimizes another app', async () => {
@@ -67,6 +73,7 @@ test('local page requires its token and rejects cross-origin, rebinding, and sta
   assert.equal(f.graded(), 0);
   assert.equal((await f.post('answer', { response: 'Yes, the operation repeats.' }, current)).status, 202);
   assert.equal((await f.post('answer', { response: 'DUPLICATE' }, current)).status, 409);
+  await f.confirm();
   assert.equal((await done).status, 'passed'); assert.equal(f.graded(), 1);
   assert.equal(await f.store.approved(f.snapshot, f.config), true);
 });
@@ -76,7 +83,7 @@ test('wrong answers stay in the same page and require a human response to the tr
   const done = f.present(); await f.waitFor('question'); await f.post('answer', { response: 'No.' }); await f.waitFor('question');
   assert.equal(f.interview.state.question.id, 'transfer'); assert.match(f.interview.state.feedback, /durable/);
   assert.equal(await f.store.approved(f.snapshot, f.config), false);
-  await f.post('answer', { response: 'The set is recreated.' }); assert.equal((await done).status, 'passed'); assert.equal(f.opened(), 1);
+  await f.post('answer', { response: 'The set is recreated.' }); await f.confirm(); assert.equal((await done).status, 'passed'); assert.equal(f.opened(), 1);
 });
 
 test('browser responses omit private concept and acceptance metadata even from a permissive public-state adapter', async t => {
@@ -102,6 +109,7 @@ test('browser responses omit private concept and acceptance metadata even from a
   assert.doesNotMatch(JSON.stringify(current), /PRIVATE_CONCEPT_ANSWER|PRIVATE_ACCEPTANCE|"concept"|"acceptance"/);
   const submitted = await f.post('answer', { response: 'Yes, another insertion is attempted.' });
   assert.doesNotMatch(await submitted.text(), /PRIVATE_CONCEPT_ANSWER|PRIVATE_ACCEPTANCE|"concept"|"acceptance"/);
+  await f.confirm();
   assert.equal((await done).status, 'passed');
   assert.equal((await f.store.read(f.snapshot.id)).questions[0].concept, concept);
   assert.deepEqual((await f.store.read(f.snapshot.id)).questions[0].acceptance, acceptance);
@@ -165,7 +173,7 @@ test('review failure stays in the page and cannot retry or add an allowance with
 
 test('a batch reuses one local page and stale prior-checkpoint submissions cannot reach the next one', async t => {
   const f = await fixture(t), first = f.present(); await f.waitFor('question'); const stale = f.interview.state;
-  await f.post('answer', { response: 'Yes.' }); await first;
+  await f.post('answer', { response: 'Yes.' }); await f.confirm(); await first;
   const next = { ...f.snapshot, id: 'b'.repeat(64), target: { ref: 'refs/heads/master' } }; await f.store.ensure(next, f.config);
   const second = f.present({ ...f.request, id: next.id, token: randomUUID() }); await f.waitFor('question');
   assert.equal(f.opened(), 1); assert.equal(f.output.filter(line => line.startsWith('Sphinx questionnaire:')).length, 1);
@@ -193,6 +201,7 @@ test('disconnected event streams cannot interrupt grading and the operation clos
     request.once('error', reject);
   });
   await f.post('answer', { response: 'Yes, the insert is repeated.' });
+  await f.confirm();
   assert.equal((await done).status, 'passed');
   const final = await (await fetch(`${f.interview.url}/state`)).json();
   assert.equal(final.phase, 'passed');
@@ -249,6 +258,7 @@ test('the page receives a chat transcript of questions, answers, feedback, follo
   assert.equal(f.interview.state.messages[2].text, 'No.');
   assert.doesNotMatch(JSON.stringify(f.interview.state), /PRIVATE_KEY|PRIVATE_RUBRIC|idempotency/);
   await f.post('answer', { response: 'The set is recreated.' });
+  await f.confirm();
   assert.equal((await done).status, 'passed');
 });
 
@@ -282,6 +292,7 @@ test('grader feedback streams into the page while grading, then the saved feedba
   for (let i = 0; i < 300 && !seenDraft; i++) { seenDraft = f.interview.state.messages.find(item => item.streaming); if (!seenDraft) await delay(10); }
   assert.equal(seenDraft?.text, 'There is no dur', 'Partial feedback reached the page before grading finished');
   release();
+  await f.confirm();
   assert.equal((await done).status, 'passed');
   const feedback = f.interview.state.messages.filter(item => item.kind === 'feedback');
   assert.deepEqual(feedback.map(item => [item.text, Boolean(item.streaming)]), [['There is no durable deduplication.', false]], 'Feedback the grader wrote is shown, even on a correct answer');
@@ -340,6 +351,11 @@ test('the page serves the frozen change and verified question evidence without d
   const answered = await fetch(`${interview.url}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(interview.url).origin, 'X-Sphinx-Token': new URL(interview.url).pathname.slice(1) },
     body: JSON.stringify({ id: first.id, revision: first.revision, action: 'answer', questionId: q.id, response: 'It returns false for a repeated id.' }) });
   assert.equal(answered.status, 202);
+  for (let i = 0; i < 300 && interview.state.phase !== 'consent'; i++) await delay(10);
+  assert.equal(interview.state.phase, 'consent');
+  const continued = await fetch(`${interview.url}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(interview.url).origin, 'X-Sphinx-Token': new URL(interview.url).pathname.slice(1) },
+    body: JSON.stringify({ id: interview.state.id, revision: interview.state.revision, action: 'proceed' }) });
+  assert.equal(continued.status, 200);
   assert.equal((await done).status, 'passed');
   assert.match(interview.state.message, /You passed\. You can close this tab/);
   assert.match(interview.state.message, /not a review of every changed line/);
@@ -360,6 +376,7 @@ test('a rate limit while grading offers the coding-agent plan, then the same que
   await f.waitFor('question');
   assert.match(f.interview.state.messages.at(-1).text, /Switched this check to Claude Code\. Send your answer again\./);
   await f.post('answer', { response: 'Yes, it inserts again.' });
+  await f.confirm();
   assert.equal((await done).status, 'passed');
   assert.deepEqual(providers, ['openrouter', 'claude']);
 });
@@ -424,6 +441,7 @@ test('picking a model during the questions grades with it from then on, and can 
   assert.doesNotMatch(before, /sonnet/, 'not saved mid-check, which would invalidate it');
   const state = f.interview.state;
   await f.post('answer', { questionId: state.question.id, response: 'Yes, because the insert is unconditional.' });
+  await f.confirm();
   assert.equal((await done).status, 'passed');
   // Git re-checks the policy after the questionnaire returns; saving must wait for close().
   assert.doesNotMatch(await readFile(path.join(f.env.SPHINX_HOME, 'config.json'), 'utf8').catch(() => ''), /sonnet/);
@@ -466,6 +484,7 @@ test('the page shows the question distance and saves a repository change only wh
   const { readFile } = await import('node:fs/promises');
   await assert.rejects(readFile(path.join(f.snapshot.repoRoot, '.sphinxconfig'), 'utf8'), { code: 'ENOENT' }, 'not written mid-check: it would invalidate this check');
   await f.post('answer', { questionId: state.question.id, response: 'Yes, because the insert is unconditional.' });
+  await f.confirm();
   assert.equal((await done).status, 'passed');
   // Git re-checks the policy after the questionnaire returns; writing must wait for close().
   await assert.rejects(readFile(path.join(f.snapshot.repoRoot, '.sphinxconfig'), 'utf8'), { code: 'ENOENT' });
@@ -536,6 +555,7 @@ test('answers saved outside the page, as sphinx answer or a terminal check does,
   // A separate store on the same state directory is what another sphinx process sees.
   const cli = createSessionStore({ env: f.env, grade: async request => { await request.beforeCall(); return { verdict: 'correct', feedback: 'Correct from the CLI.', followUp: null }; } });
   await cli.answer(f.snapshot.id, 'Yes, the retry repeats the insert.', f.config);
+  await f.confirm();
   const result = await Promise.race([done, delay(3000).then(() => 'still waiting')]);
   assert.deepEqual(result, { status: 'passed', id: f.snapshot.id });
   assert.equal(f.interview.state.phase, 'passed'); assert.equal(f.graded(), 0);
@@ -550,5 +570,30 @@ test('a wrong answer saved outside the page moves the page to the transfer quest
   for (let i = 0; i < 300 && f.interview.state.question?.id !== 'transfer'; i++) await delay(10);
   assert.equal(f.interview.state.question.id, 'transfer'); assert.equal(f.interview.state.phase, 'question');
   assert.equal((await f.post('answer', { response: 'The set is recreated.' })).status, 202);
+  await f.confirm();
   assert.equal((await done).status, 'passed'); assert.equal(f.graded(), 1);
+});
+
+test('after a waiting pass, skip and pause are refused until continue or stop', async t => {
+  const f = await fixture(t), done = f.present(); await f.waitFor('question');
+  await f.post('answer', { response: 'Yes, the insert is repeated.' });
+  const consent = await f.waitFor('consent');
+  assert.deepEqual(consent.choices.map(choice => choice.value), ['proceed', 'stop']);
+  assert.equal((await f.post('skip', { response: 'prod is down' })).status, 409);
+  assert.equal((await f.post('pause')).status, 409);
+  assert.equal((await f.post('answer', { response: 'late' })).status, 409);
+  await f.confirm();
+  assert.equal((await done).status, 'passed');
+  assert.equal(await f.store.approved(f.snapshot, f.config), true);
+});
+
+test('stopping after a waiting pass keeps the receipt and does not mark this Git operation complete', async t => {
+  const f = await fixture(t), done = f.present(); await f.waitFor('question');
+  await f.post('answer', { response: 'Yes, the insert is repeated.' });
+  await f.confirm('stop');
+  assert.equal((await done).status, 'stopped');
+  assert.equal(f.interview.state.phase, 'stopped');
+  assert.match(f.interview.state.message, /You stopped this Git operation/);
+  assert.equal(await f.store.approved(f.snapshot, f.config), true);
+  assert.equal((await checkpointTerminalStatus({ id: f.snapshot.id, env: f.env })).status, 'pending');
 });

@@ -154,7 +154,7 @@ test('state line names follow-ups and finished checks stop describing a waiting 
   assert.equal(p.nodes.status.textContent, 'Question 1 of 1'); assert.match(p.nodes.status.className, /phase-question/);
   p.update({ ...question, sequence: 2, question: { id: 'q2', prompt: 'Again?' }, messages: [asked, { role: 'sphinx', kind: 'question', questionId: 'q2', number: 1, followUp: true, text: 'Again?' }] });
   assert.equal(p.nodes.status.textContent, 'Question 1 of 1 · Needs another answer'); assert.match(p.nodes.status.className, /retry/);
-  assert.match(p.nodes.waiting.textContent, /Git continues after you pass/);
+  assert.match(p.nodes.waiting.textContent, /After you pass, choose whether Git continues/);
   p.update({ ...question, sequence: 3, phase: 'passed' });
   assert.match(p.nodes.status.className, /phase-passed/);
   assert.equal(p.nodes.waiting.hidden, true);
@@ -327,6 +327,39 @@ test('passing shows a clear end state that says the tab can be closed', () => {
   p.update({ ...question, sequence: 2, phase: 'passed', message: 'You passed. You can close this tab; Git is finishing the push on its own.' });
   assert.equal(p.nodes.message.className, 'message passed');
   assert.match(p.nodes.message.textContent, /close this tab/);
+});
+
+test('consent after a waiting pass offers continue or stop and hides skip and pause', async () => {
+  const bodies = [];
+  const p = page(async (_url, init) => { bodies.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ ...question, sequence: 4, phase: 'passed', message: 'You passed. You can close this tab; Git is finishing the push on its own.' }) }; });
+  p.update({ ...question, sequence: 2, phase: 'consent', message: 'You passed. Continue this Git operation, or stop it now that you understand the change.',
+    choices: [
+      { value: 'proceed', label: 'Continue this Git operation', description: 'The same push or commit goes through.' },
+      { value: 'stop', label: 'Stop this Git operation', description: 'Your pass is saved.' },
+    ] });
+  assert.equal(p.nodes.status.textContent, 'Continue or stop');
+  assert.match(p.nodes.status.className, /phase-consent/);
+  assert.equal(p.nodes.message.className, 'message passed');
+  assert.equal(p.nodes.recovery.hidden, false);
+  assert.equal(p.nodes.recovery.children.length, 2);
+  assert.equal(p.nodes.skip.hidden, true);
+  assert.equal(p.nodes.pause.hidden, true);
+  assert.equal(p.nodes.composer.hidden, true);
+  assert.match(p.nodes.waiting.textContent, /continue or stop this operation/);
+  await p.nodes.recovery.children[0].children[0].onclick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(bodies.map(body => body.action), ['proceed']);
+  assert.equal(p.nodes.status.textContent, 'Passed');
+});
+
+test('stopping after a pass is a finished check that no longer describes a waiting Git operation', () => {
+  const p = page(); p.update(question);
+  p.update({ ...question, sequence: 2, phase: 'stopped', message: 'You stopped this Git operation. Your pass is saved. You can close this tab.\nThis records your answers, not a review of every changed line.' });
+  assert.equal(p.nodes.status.textContent, 'This records your answers, not a review of every changed line.');
+  assert.equal(p.nodes.waiting.hidden, true);
+  assert.equal(p.nodes.skip.hidden, true);
+  assert.equal(p.nodes.pause.hidden, true);
+  assert.ok(p.buttons.every(button => button.disabled));
 });
 
 test('the context line names the model reviewing this check', () => {

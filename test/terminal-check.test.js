@@ -66,9 +66,23 @@ test('auto uses the terminal unless the browser can open in the background', () 
   assert.equal(prefersTerminal({ interface: 'browser' }, { env: { SSH_TTY: '/dev/x' }, platform: 'linux' }), false);
 });
 
+test('after a waiting pass, continue lets Git through and stop keeps the receipt without continuing', async () => {
+  const done = { status: 'passed', question: null, progress: { completed: 1, total: 1 }, verdict: 'correct', feedback: '' };
+  const continued = harness({ answers: ['It charges twice', 'continue'], results: [done], waitingGit: true });
+  assert.equal(await continued.run(), 0);
+  assert.match(continued.output(), /Continue this Git operation\?/);
+  assert.match(continued.output(), /Approval saved\. Git is continuing\./);
+  const halted = harness({ answers: ['It charges twice', 'stop'], results: [{ ...done }], waitingGit: true });
+  assert.equal(await halted.run(), 4);
+  assert.match(halted.output(), /Stopped\. Git will not continue\./);
+  const retried = harness({ answers: ['It charges twice', 'maybe', 'c'], results: [{ ...done }], waitingGit: true });
+  assert.equal(await retried.run(), 0);
+  assert.match(retried.output(), /Type continue or stop\./);
+});
+
 test('Git asks inline on its own terminal, else opens a window', async () => {
   const fakeChild = code => { const child = new EventEmitter(); child.kill = () => {}; queueMicrotask(() => child.emit('exit', code)); return child; };
-  for (const [code, status] of [[0, 'passed'], [3, 'skipped'], [1, 'pending']]) {
+  for (const [code, status] of [[0, 'passed'], [3, 'skipped'], [4, 'stopped'], [1, 'pending']]) {
     let spawned;
     const result = await runGitTerminalCheck({ request: { id: 'abc' }, env: { A: '1' }, openTty: () => 99, spawnImpl: (...args) => { spawned = args; return fakeChild(code); }, openWindow: () => assert.fail('no window when a terminal is visible') });
     assert.equal(result.status, status);

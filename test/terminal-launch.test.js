@@ -110,6 +110,20 @@ test('worker runs exact check ID/cwd in an inherited TTY and records only comple
   assert.equal((await runCheckpointTerminal({ recordFile: f.recordFile, token: record.token, env: f.env, isTTY: true })).status, 'ignored');
 });
 
+test('worker records a stopped check when the interview exits 4', async t => {
+  const f = await fixture(t);
+  await launchCheckpointTerminal({ ...f.options, launch: async () => true });
+  const record = await json(f.recordFile);
+  const result = await runCheckpointTerminal({ recordFile: f.recordFile, token: record.token, env: f.env, isTTY: true, spawnImpl: (_command, _args, _options) => {
+    const child = new EventEmitter(); child.pid = 7654321;
+    setImmediate(() => child.emit('exit', 4));
+    return child;
+  } });
+  assert.deepEqual(result, { status: 'stopped', code: 4 });
+  assert.equal((await json(f.recordFile)).status, 'stopped');
+  assert.equal((await launchCheckpointTerminal({ ...f.options, launch: () => { throw new Error('stopped receipt'); } })).status, 'stopped');
+});
+
 test('worker refuses piped input and mismatched tokens, preserving an incomplete checkpoint', async t => {
   const f = await fixture(t);
   await launchCheckpointTerminal({ ...f.options, launch: async () => true });

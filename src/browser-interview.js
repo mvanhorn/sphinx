@@ -230,9 +230,14 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
     let data; try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return send(res, 400, { error: 'Invalid response.' }); }
     if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(key => !['id', 'revision', 'action', 'response', 'questionId'].includes(key))
       || typeof data.action !== 'string' || (data.response !== undefined && (typeof data.response !== 'string' || data.response.length > 8000))) return send(res, 400, { error: 'Invalid response.' });
-    // Live progress changes the revision often; Pause and Skip only need the checkpoint.
-    if (!active || active.signal.aborted || data.id !== state.id || (!['pause', 'skip'].includes(data.action) && data.revision !== state.revision)) return send(res, 409, { error: 'This checkpoint changed. Use the current question.' });
+    // Live progress changes the revision often; Pause, Skip, Continue, and Stop only need the checkpoint.
+    if (!active || active.signal.aborted || data.id !== state.id || (!['pause', 'skip', 'proceed', 'stop'].includes(data.action) && data.revision !== state.revision)) return send(res, 409, { error: 'This checkpoint changed. Use the current question.' });
+    if (['proceed', 'stop'].includes(data.action) && resolver?.allowed.includes(data.action)) {
+      const current = resolver;
+      send(res, 200, state); current.resolve(data); return;
+    }
     if (data.action === 'skip') {
+      if (resolver?.allowed.includes('proceed') || resolver?.allowed.includes('stop')) return send(res, 409, { error: 'Choose continue or stop for this Git operation.' });
       // Available at any step, including while the review is still running.
       skip = { reason: data.response };
       active.abort(cancelled());
@@ -240,6 +245,7 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
       return send(res, 200, state);
     }
     if (data.action === 'pause') {
+      if (resolver?.allowed.includes('proceed') || resolver?.allowed.includes('stop')) return send(res, 409, { error: 'Choose continue or stop for this Git operation.' });
       active.abort(cancelled());
       publish({ ...publicFields(state), phase: 'paused', message: pauseMessage(), ...(resumeCommand ? { resume: resumeCommand } : {}) });
       return send(res, 200, state);
@@ -337,7 +343,7 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
       reservation = await reserve({ request, env: operationEnv, kind: 'browser' });
       if (reservation?.status !== 'claimed') {
         const status = await waitForExisting({ id: request.id, env: operationEnv, timeoutMs, signal: localSignal });
-        return { status: status === 'passed' ? 'passed' : 'pending', id: request.id };
+        return { status: status === 'passed' || status === 'stopped' ? status : 'pending', id: request.id };
       }
       const session = await store.read(request.id), config = await readConfig(request.repoRoot, operationEnv);
       if (session.snapshot.repoRoot !== request.repoRoot) throw new Error('This checkpoint belongs to another repository.');
@@ -491,6 +497,21 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
         }
       }
       localSignal.throwIfAborted(); await validate(session.snapshot, config);
+      if (waitingGit && !visible.noQuestionReason) {
+        const consent = await waitForAction({
+          ...publicFields(visible), repoRoot: request.repoRoot, phase: 'consent',
+          message: 'You passed. Continue this Git operation, or stop it now that you understand the change.',
+          choices: [
+            { value: 'proceed', label: 'Continue this Git operation', description: 'The same push or commit goes through.' },
+            { value: 'stop', label: 'Stop this Git operation', description: 'Your pass is saved. This operation does not go through. Change the code if you do not want the same change to land, then run the Git command again.' },
+          ],
+        }, ['proceed', 'stop']);
+        if (consent.action === 'stop') {
+          finalStatus = 'pending';
+          publish({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'stopped', message: 'You stopped this Git operation. Your pass is saved. You can close this tab.\nThis records your answers, not a review of every changed line.' });
+          return { status: 'stopped', id: request.id };
+        }
+      }
       finalStatus = 'passed';
       publish({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'passed', message: visible.noQuestionReason ? `No questions needed: ${visible.noQuestionReason} You can close this tab${waitingGit ? '; Git is finishing the push on its own' : ''}.` : waitingGit ? 'You passed. You can close this tab; Git is finishing the push on its own.\nThis records your answers, not a review of every changed line.' : 'You passed. You can close this tab.\nThis records your answers, not a review of every changed line.' });
       return { status: 'passed', id: request.id };

@@ -12,7 +12,7 @@ for (const agent of ['codex', 'claude']) {
     assert.equal(result.output.hookSpecificOutput.hookEventName, 'SessionStart');
     const context = result.output.hookSpecificOutput.additionalContext;
     assert.match(context, /keeps the original Git operation waiting/);
-    assert.match(context, /that same operation continues automatically/);
+    assert.match(context, /they confirm whether that same operation should continue/);
     assert.match(context, /Do not start a duplicate Git operation while it waits/);
     assert.match(context, /PostToolUse hook opens the same local browser questionnaire after the shell command exits/);
     assert.match(context, /This fallback does not resume an exited Git process/);

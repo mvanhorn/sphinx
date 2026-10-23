@@ -137,6 +137,21 @@ test('the original push waits, preserves hook input, and continues exactly once 
   assert.deepEqual(await f.pending(), []);
 });
 
+test('stopping after a pass keeps the receipt and does not send the original push', { timeout: 15000 }, async t => {
+  const f = await fixture(t), child = f.start('push', 'origin', 'main');
+  const checkpoint = await f.ready(child);
+  await f.release(checkpoint, { status: 'stopped', approve: true });
+  const result = await child.finished;
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /you passed and stopped this Git operation/);
+  await assert.rejects(f.bare('rev-parse', '--verify', 'refs/heads/main'));
+  const again = f.start('push', 'origin', 'main');
+  const retried = await again.finished;
+  assert.equal(retried.code, 0, retried.stderr);
+  assert.equal(await f.bare('rev-parse', 'refs/heads/main'), f.baseHead);
+  assert.deepEqual(await f.oldCalls(), ['pre-push', 'pre-push']);
+});
+
 test('pause, cancellation, and a false terminal success cannot authorize a push or leave forms queued', { timeout: 30000 }, async t => {
   for (const mode of ['pause', 'cancel', 'false-success']) await t.test(mode, async t => {
     const f = await fixture(t), child = f.start('push', 'origin', 'main');

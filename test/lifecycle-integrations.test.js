@@ -12,7 +12,7 @@ test('Cursor SessionStart uses documented context/env fields and never installs 
   assert.match(output.additional_context, /browser/);
   assert.match(output.additional_context, /Never run the interview/);
   assert.match(output.additional_context, /keeps the original Git operation waiting/);
-  assert.match(output.additional_context, /that same operation continues automatically/);
+  assert.match(output.additional_context, /they confirm whether that same operation should continue/);
   assert.match(output.additional_context, /handles fallback requests only/);
   assert.match(output.additional_context, /verify that the original Git operation has exited with a Sphinx blocking failure before retrying/);
   assert.match(output.additional_context, /waits up to 25 minutes, but the host may cancel the shell sooner/);

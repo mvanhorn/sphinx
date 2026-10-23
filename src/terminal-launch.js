@@ -208,7 +208,7 @@ export async function launchCheckpointTerminal({ request, env = process.env, pla
     signal?.throwIfAborted();
     const previous = await checkpointTerminalStatus({ id: request.id, env, isAlive });
     if (['starting', 'running'].includes(previous?.status)) return { status: 'already-open', id: request.id };
-    if (previous?.status === 'passed' && request.createdAt <= previous.finishedAt) return { status: 'passed', id: request.id };
+    if (['passed', 'stopped'].includes(previous?.status) && request.createdAt <= previous.finishedAt) return { status: previous.status, id: request.id };
     if (previous?.presentationToken === request.token) return { status: 'suppressed', id: request.id };
     const record = { version: 1, id: request.id, token: randomUUID(), presentationToken: request.token, repoRoot: request.repoRoot, home, cliPath, kind: 'terminal', waitingGit: request.delivery === 'hook', status: 'starting', createdAt: Date.now(), updatedAt: Date.now() };
     await writeJson(file, record);
@@ -292,7 +292,7 @@ export async function runCheckpointTerminal({ recordFile, token, env = process.e
     if (Number.isInteger(child.pid)) { running.childPid = child.pid; childWrite = writeJson(recordFile, running).catch(() => {}); }
   });
   await childWrite;
-  const result = { ...running, status: code === 0 ? 'passed' : code === 3 ? 'skipped' : 'pending', updatedAt: Date.now(), finishedAt: Date.now() };
+  const result = { ...running, status: code === 0 ? 'passed' : code === 3 ? 'skipped' : code === 4 ? 'stopped' : 'pending', updatedAt: Date.now(), finishedAt: Date.now() };
   if ((await readJson(recordFile, null))?.token === token) await writeJson(recordFile, result);
   // Recorded first, so a waiting Git operation is not held by this prompt.
   if (result.status === 'pending' && isTTY) await pause();

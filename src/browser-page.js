@@ -94,7 +94,7 @@ button.danger{background:#8d271e;border-color:#8d271e;color:#fff}button.danger:h
 .activity .count{color:#8f857a;white-space:nowrap}.activity .count::after{content:" ▸"}.activity details[open] .count::after{content:" ▾"}
 .activity ol{list-style:none;margin:8px 0 0;padding:0 0 0 14px;border-left:1px solid var(--line);max-height:220px;overflow-y:auto}.activity ol li{padding:1px 0 1px 8px}
 .turn.streaming .turn-text::after{content:"▍";color:var(--amber);animation:pulse 1s steps(2) infinite}
-.status.busy::before{content:"● ";color:var(--amber);animation:pulse 1.2s ease-in-out infinite}.status.phase-question,.status.phase-passed,.status.phase-paused,.status.phase-error,.status.phase-skipped{display:inline-block;font-size:13px;font-weight:600;line-height:1;padding:6px 10px;border:1px solid currentColor;border-radius:999px}.status.phase-question{color:var(--amber)}.status.phase-question::before{content:"◆ "}.status.phase-question.retry{color:var(--retry)}.status.phase-question.retry::before{content:"↺ "}.status.phase-passed{color:var(--pass)}.status.phase-passed::before{content:"✓ "}.status.phase-paused,.status.phase-skipped{color:var(--muted)}.status.phase-paused::before{content:"‖ "}.status.phase-skipped::before{content:"↷ "}.status.phase-error{color:var(--retry)}.status.phase-error::before{content:"! "}@keyframes pulse{50%{opacity:.25}}
+.status.busy::before{content:"● ";color:var(--amber);animation:pulse 1.2s ease-in-out infinite}.status.phase-question,.status.phase-passed,.status.phase-consent,.status.phase-paused,.status.phase-error,.status.phase-skipped,.status.phase-stopped{display:inline-block;font-size:13px;font-weight:600;line-height:1;padding:6px 10px;border:1px solid currentColor;border-radius:999px}.status.phase-question{color:var(--amber)}.status.phase-question::before{content:"◆ "}.status.phase-question.retry{color:var(--retry)}.status.phase-question.retry::before{content:"↺ "}.status.phase-passed,.status.phase-consent{color:var(--pass)}.status.phase-passed::before,.status.phase-consent::before{content:"✓ "}.status.phase-paused,.status.phase-skipped,.status.phase-stopped{color:var(--muted)}.status.phase-paused::before,.status.phase-stopped::before{content:"‖ "}.status.phase-skipped::before{content:"↷ "}.status.phase-error{color:var(--retry)}.status.phase-error::before{content:"! "}@keyframes pulse{50%{opacity:.25}}
 @media(prefers-reduced-motion:reduce){.status.busy::before,.activity.live summary .latest::before{animation:none}}
 footer{flex-shrink:0;display:flex;flex-wrap:wrap;gap:2px 8px;padding:0 0 14px;color:var(--muted);font-size:12px;line-height:1.5}footer p{margin:0}[hidden]{display:none!important}
 #back-question{display:none}
@@ -216,7 +216,7 @@ document.onkeydown=event=>{if(event.key!=='Escape')return;if(menuOpen){closeMenu
 document.onclick=event=>{if(event.target?.isConnected===false)return;if(menuOpen&&!$('model-menu').contains?.(event.target)&&!$('model').contains?.(event.target))closeMenu();if(distanceOpen&&!$('distance-menu').contains?.(event.target)&&!$('distance').contains?.(event.target))closeDistance();};
 $('resume-copy').onclick=async()=>{try{await navigator.clipboard.writeText($('resume-command').textContent);$('resume-copy').textContent='Copied';setTimeout(()=>{$('resume-copy').textContent='Copy';},1500);}catch{}};
 // A background tab says when it is waiting on you.
-const waitingOnYou=()=>['question','recovery'].includes(current?.phase)&&!finished;
+const waitingOnYou=()=>['question','recovery','consent'].includes(current?.phase)&&!finished;
 function titleView(){document.title=waitingOnYou()&&document.visibilityState==='hidden'?'● Sphinx: your answers needed':'Sphinx — understanding check';}
 document.onvisibilitychange=titleView;
 // For a push that may be a pull request: whether to post the stamp there once you pass.
@@ -309,15 +309,15 @@ function history(messages){
 }
 function render(state){
  if(current&&state.sequence<current.sequence)return;
- const previous=current;current=state;finished=state.operationClosed||['passed','paused','error','skipped'].includes(state.phase);
+ const previous=current;current=state;finished=state.operationClosed||['passed','paused','error','skipped','stopped'].includes(state.phase);
  const repo=state.repoName||state.repoRoot?.split(/[\\\\/]/).filter(Boolean).at(-1),branch=state.target?.replace(/^refs\\/heads\\//,'');
  text('meta',repo||state.change?.header?.repository||'');$('meta').title=state.repoRoot||'';
  modelView(state);distanceView(state);stampView(state);titleView();
  $('resume').hidden=!(state.phase==='paused'&&state.resume);if(state.resume)$('resume-command').textContent=state.resume;scoreView(state.score);updateView(state.update);const messages=state.messages||[];
- text('waiting',finished?'':state.waitingGit?'Git continues after you pass. Closing this tab leaves it waiting; Pause check stops it.':'Closing this tab leaves the check waiting. Use Pause check to stop.');
- const label=state.phase==='question'?'Question '+(state.progress.completed+1)+' of '+state.progress.total:state.phase==='working'?'Reviewing…':state.phase==='recovery'?'Review needs your decision':state.phase==='passed'?'Passed':state.phase==='paused'?'Paused':state.phase==='skipped'?'Skipped':state.phase==='error'?'Check stopped':'Waiting…';
+ text('waiting',finished?'':state.phase==='consent'?'Git is waiting for you to continue or stop this operation. Closing this tab leaves it waiting.':state.waitingGit?'After you pass, choose whether Git continues. Closing this tab leaves it waiting; Pause check stops it.':'Closing this tab leaves the check waiting. Use Pause check to stop.');
+ const label=state.phase==='question'?'Question '+(state.progress.completed+1)+' of '+state.progress.total:state.phase==='working'?'Reviewing…':state.phase==='recovery'?'Review needs your decision':state.phase==='consent'?'Continue or stop':state.phase==='passed'?'Passed':state.phase==='paused'?'Paused':state.phase==='skipped'?'Skipped':state.phase==='stopped'?'Stopped':state.phase==='error'?'Check stopped':'Waiting…';
  const retry=state.phase==='question'&&[...messages].reverse().find(item=>item.kind==='question')?.followUp;
- text('status',label+(retry?' · Needs another answer':''));$('message').className='message'+(state.phase==='passed'?' passed':'');scope(state,branch,label);$('status').className='status phase-'+state.phase+(state.phase==='working'?' busy':'')+(retry?' retry':'');if(state.phase==='question'&&!retry)$('status').hidden=true;text('message',state.message);text('error',state.phase==='recovery'?'':state.error);text('recovery-reason',state.phase==='recovery'?state.error:''); if(state.phase==='passed'&&String(state.message||'').includes('\\n')){const [lead,...rest]=state.message.split('\\n');text('message',lead);text('status',rest.join(' '));$('status').className='status passed-note';}
+ text('status',label+(retry?' · Needs another answer':''));$('message').className='message'+(['passed','consent'].includes(state.phase)?' passed':'');scope(state,branch,label);$('status').className='status phase-'+state.phase+(state.phase==='working'?' busy':'')+(retry?' retry':'');if(state.phase==='question'&&!retry)$('status').hidden=true;text('message',state.message);text('error',state.phase==='recovery'?'':state.error);text('recovery-reason',state.phase==='recovery'?state.error:''); if(['passed','stopped'].includes(state.phase)&&String(state.message||'').includes('\\n')){const [lead,...rest]=state.message.split('\\n');text('message',lead);text('status',rest.join(' '));$('status').className='status passed-note';}
  history(messages);
  // Live activity already shows progress; avoid stacking generic spinners under it.
  if(state.phase==='working'&&(messages.at(-1)?.kind==='activity'||messages.at(-1)?.streaming)){$('status').hidden=true;$('message').hidden=true;}
@@ -325,7 +325,7 @@ function render(state){
  $('question').hidden=state.phase!=='question'||messages.some(item=>item.kind==='question'&&item.questionId===state.question?.id);
  $('composer').hidden=!['question','working'].includes(state.phase)&&!state.error;
  $('form').hidden=!['question','working'].includes(state.phase);
- $('recovery').hidden=state.phase!=='recovery';$('pause').hidden=finished;$('skip').hidden=finished;if(finished)$('skipbar').hidden=true;
+ $('recovery').hidden=!['recovery','consent'].includes(state.phase);$('pause').hidden=finished||state.phase==='consent';$('skip').hidden=finished||state.phase==='consent';if(finished||state.phase==='consent')$('skipbar').hidden=true;
  if(state.question){
   text('prompt',state.question.prompt);$('choices').replaceChildren();
   for(const choice of state.question.choices||[]){const li=document.createElement('li');li.textContent=choice;$('choices').append(li);}
@@ -337,10 +337,10 @@ function render(state){
  const graded=[...messages].reverse().find(item=>item.role==='human'&&item.status==='graded');
  if(graded&&lastGraded!==graded.id){lastGraded=graded.id;$('response').value='';resize();if(disputing)setDispute(false);}
  $('recovery').replaceChildren();
- if(state.phase==='recovery')for(const choice of state.choices||[]){
+ if(['recovery','consent'].includes(state.phase))for(const choice of state.choices||[]){
   if(choice.value==='pause')continue;
   const row=document.createElement('div'),button=document.createElement('button'),description=document.createElement('p');
-  button.type='button';button.textContent=choice.label;button.onclick=()=>send(choice.value);description.textContent=choice.description;row.append(button,description);$('recovery').append(row);
+  button.type='button';button.textContent=choice.label;if(choice.value==='proceed')button.className='primary';if(choice.value==='stop')button.className='danger';button.onclick=()=>send(choice.value);description.textContent=choice.description;row.append(button,description);$('recovery').append(row);
  }
  checkpoint(state);evidenceList();controls();
  // A new step (question, recovery decision, result) must never sit below the fold.
@@ -351,6 +351,7 @@ function render(state){
 async function send(action){
  if(!current||submitting||finished||!connected)return;
  if(['answer','learn','dispute'].includes(action)&&current.phase!=='question')return;
+ if(['proceed','stop'].includes(action)&&current.phase!=='consent')return;
  const response=$('response').value.trim();
  if(['answer','dispute'].includes(action)&&!response){text('error',action==='dispute'?'Describe what is ambiguous or unsupported in the answer box.':'Enter your prediction and a short reason.');$('response').focus();return;}
  submitting=true;controls();

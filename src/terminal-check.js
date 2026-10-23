@@ -89,7 +89,8 @@ function commandsLine(terminal, { waitingGit }) {
 
 /**
  * Run the check in this terminal. Resolves 0 when passed, 1 when paused or
- * quit, and 3 when the human skipped a waiting Git operation.
+ * quit, 3 when the human skipped a waiting Git operation, and 4 when they
+ * passed and then stopped that waiting operation.
  */
 export async function runTerminalCheck({ store, session, config, ask, terminal: base, stream = process.stdout, signal, waitingGit = false, planProviders = [], validate, choose, skip, env = process.env }) {
   // Lines keep their own indentation; the shared helpers would rewrap it away.
@@ -121,7 +122,7 @@ export async function runTerminalCheck({ store, session, config, ask, terminal: 
   if (!state) return 1;
   if (state.status === 'passed' && state.noQuestionReason) {
     terminal.line(''); terminal.line(`  ${style.green('✓')} No questions needed: ${plain(state.noQuestionReason)}`);
-    return finish(terminal, { waitingGit });
+    return finish(terminal, { waitingGit, ask: false });
   }
 
   let shownId = null, shownNumber = 0, shownDraft = null;
@@ -176,10 +177,27 @@ export async function runTerminalCheck({ store, session, config, ask, terminal: 
   const final = await score().catch(() => null);
   const line = scoreLine(final, style);
   if (line) terminal.line(line);
-  return finish(terminal, { waitingGit });
+  return finish(terminal, { waitingGit, ask });
 }
 
-function finish(terminal, { waitingGit }) {
+async function finish(terminal, { waitingGit, ask }) {
+  if (waitingGit && ask) {
+    const { style } = terminal;
+    terminal.line('');
+    terminal.line(`  ${style.strong('Continue this Git operation?')}`);
+    terminal.note('continue lets the same push or commit go through. stop keeps your pass and ends this operation. Change the code if you do not want the same change to land.');
+    for (;;) {
+      const choice = plain(await ask(`  ${style.amber('›')} continue / stop: `)).trim().toLowerCase();
+      if (['continue', 'c', 'y', 'yes', 'proceed'].includes(choice)) break;
+      if (['stop', 's', 'n', 'no'].includes(choice)) {
+        terminal.line('');
+        terminal.line(`  ${style.amber('‖')} Stopped. Git will not continue.`);
+        terminal.line('');
+        return 4;
+      }
+      terminal.warning('Type continue or stop.');
+    }
+  }
   terminal.line(terminal.style.muted(waitingGit ? '  Approval saved. Git is continuing.' : '  Approval saved for this exact change and destination. A waiting Git operation can now continue.'));
   terminal.line('');
   return 0;

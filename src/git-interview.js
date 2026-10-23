@@ -35,12 +35,13 @@ export async function runGitCheckpointTerminal({ request, env = process.env, sig
       } while (started?.status === 'busy');
     } catch { return stopped ? result('pending', stopped) : result('unavailable', 'launch-failed'); }
     if (started?.status === 'passed') return result('passed');
+    if (started?.status === 'stopped') return result('stopped');
     if (!['opened', 'already-open'].includes(started?.status)) return result(started?.status === 'suppressed' ? 'pending' : 'unavailable');
     try {
       controller.signal.throwIfAborted();
       const status = await waitForResult({ id: request.id, env, timeoutMs: Math.max(1, deadline - Date.now()), signal: controller.signal });
       controller.signal.throwIfAborted();
-      return result(['passed', 'skipped', 'pending', 'unavailable', 'interrupted'].includes(status) ? status : 'interrupted');
+      return result(['passed', 'skipped', 'stopped', 'pending', 'unavailable', 'interrupted'].includes(status) ? status : 'interrupted');
     } catch { return stopped ? result('pending', stopped) : result('interrupted'); }
   };
   try { return await Promise.race([operation(), interrupted]); }
@@ -85,6 +86,6 @@ export async function runGitTerminalCheck({ request, env = process.env, signal, 
       child.once('error', () => resolve(null));
       child.once('exit', exit => { signal?.removeEventListener('abort', onAbort); resolve(exit); });
     });
-    return { id: request.id, status: code === 0 ? 'passed' : code === 3 ? 'skipped' : code === null ? 'unavailable' : 'pending' };
+    return { id: request.id, status: code === 0 ? 'passed' : code === 3 ? 'skipped' : code === 4 ? 'stopped' : code === null ? 'unavailable' : 'pending' };
   } finally { try { closeSync(tty); } catch { /* Already closed. */ } }
 }

@@ -112,12 +112,12 @@ Git prints the questionnaire address and waits:
 
 ```text
 Sphinx: understanding check needed for refs/heads/main (medium change).
-Sphinx: Git is waiting for your answers in the local Sphinx questionnaire. It will continue automatically after you pass. Do not start another copy of this Git operation.
+Sphinx: Git is waiting for your answers in the local Sphinx questionnaire. After you pass, confirm whether this Git operation should continue. Do not start another copy of this Git operation.
 Sphinx questionnaire: http://127.0.0.1:56114/fSdZM7yg…
 Sphinx: questionnaire opened in a background browser tab. Your coding window stays in place.
 ```
 
-On macOS, the page opens in a background browser tab. On Linux, WSL, and over SSH, Git prints `open the local URL above to answer` instead, so open the printed address yourself. From a remote session, forward the same port and open the URL unchanged, or run `sphinx check`; see [remote machines](docs/integrations.md#remote-machines-ssh-and-ci). Questions can take a moment while the reviewer reads the change, and the page shows its progress as it works. Beside each question, the page shows the checkpoint's changed files, lines added and removed, a browsable diff, and the code locations the reviewer read for that question. Answer each question with a prediction and a short reason. When you pass:
+On macOS, the page opens in a background browser tab. On Linux, WSL, and over SSH, Git prints `open the local URL above to answer` instead, so open the printed address yourself. From a remote session, forward the same port and open the URL unchanged, or run `sphinx check`; see [remote machines](docs/integrations.md#remote-machines-ssh-and-ci). Questions can take a moment while the reviewer reads the change, and the page shows its progress as it works. Beside each question, the page shows the checkpoint's changed files, lines added and removed, a browsable diff, and the code locations the reviewer read for that question. Answer each question with a prediction and a short reason. When you pass, choose **Continue this Git operation** or **Stop this Git operation**. Continue lets the same push go through:
 
 ```text
 Sphinx: understanding check complete. Continuing this Git operation.
@@ -125,7 +125,7 @@ To github.com:you/your-repo.git
  * [new branch]      main -> main
 ```
 
-Pushing the same change again does not ask again. A pass lasts 24 hours, unless the code, destination, or policy changes.
+Stop keeps the pass and ends this push. Pushing the same change again does not ask questions again. A pass lasts 24 hours, unless the code, destination, or policy changes. Change the code first if you do not want that same change to land.
 
 ## During and after a check
 
@@ -133,6 +133,7 @@ Pushing the same change again does not ask again. A pass lasts 24 hours, unless 
 - **Explain this.** Shows the concept and asks you a new question.
 - **Dispute question.** Use this if a question's premise is wrong or ambiguous. A bad question must be corrected before that concept can pass.
 - **Pause check.** Saves your progress and stops the push. Run the same `git push` later to pick up where you left off.
+- **Continue or stop.** After you pass, Git still waits. Continue lets the same push or commit go through. Stop keeps the pass and ends this operation. The same change pushed again does not ask questions again unless the code, destination, or policy changed.
 - **Closing the tab** doesn't stop anything. Git keeps waiting, and the same address works until the 25-minute deadline.
 - **Skip this time.** Lets the push through immediately, even while the review is still running. Skips never count as passing.
 - **`sphinx yolo`** turns checks off for the current repository, or globally when run outside one. Run it again to turn checks back on. A repository's own setting wins over the global one, so turning yolo off inside a repository keeps checks on there even while global yolo is on. `--reason "prod hotfix"` is optional.
