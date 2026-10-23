@@ -245,6 +245,8 @@ test('interactive CLI stays open after review failure until the human pauses or 
   resumed.child.stdin.write('1\n');
   await resumed.waitFor('› ');
   resumed.child.stdin.write('No. The existing ID is rejected before insertion.\n');
+  await resumed.waitFor('continue / stop');
+  resumed.child.stdin.write('continue\n');
   assert.equal(await resumed.done, 0);
   assert.match(resumed.output(), /Understanding check complete/);
   const record = JSON.parse(await readFile(path.join(f.env.SPHINX_HOME, 'sessions', `${id}.json`), 'utf8'));

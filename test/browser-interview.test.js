@@ -36,7 +36,7 @@ async function fixture(t, { generate, grade, maxModelCalls = 20, validate = asyn
     for (let i = 0; i < 300 && interview.state.phase !== phase; i++) await delay(10);
     assert.equal(interview.state.phase, phase, JSON.stringify(interview.state)); return interview.state;
   };
-  const post = async (action, extra = {}, selected = interview.state, headers = {}) => fetch(`${interview.url}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(interview.url).origin, 'X-Sphinx-Token': new URL(interview.url).pathname.slice(1), ...headers }, body: JSON.stringify({ id: selected.id, revision: selected.revision, action, ...(['answer', 'learn', 'dispute'].includes(action) ? { questionId: selected.question.id } : {}), ...extra }) });
+  const post = async (action, extra = {}, selected = interview.state, headers = {}) => fetch(`${interview.url}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(interview.url).origin, 'X-Sphinx-Token': new URL(interview.url).pathname.slice(1), ...headers }, body: JSON.stringify({ id: selected.id, revision: selected.revision, action, ...(['answer', 'learn', 'dispute'].includes(action) && selected.question ? { questionId: selected.question.id } : {}), ...extra }) });
   const confirm = async (action = 'proceed') => {
     await waitFor('consent');
     const response = await post(action);
