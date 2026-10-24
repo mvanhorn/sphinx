@@ -96,7 +96,7 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
       const old = await listRequests({ cwd: request.repoRoot, host: request.host, hostSession: request.hostSession, env });
       for (const previous of old.filter(item => item.id === request.id)) await claim(previous, { env });
     }
-    if (requests.length) output('Sphinx: Git is waiting for your answers in the local Sphinx questionnaire. After you pass, confirm whether this Git operation should continue. Do not start another copy of this Git operation.');
+    if (requests.length) output(`Sphinx: Git is waiting for your answers in the local Sphinx questionnaire. After you pass, confirm whether this ${op} should continue. Do not start another copy of this ${op}.`);
     const interviewEnv = interviewEnvironment(cwd, env);
     if (requests.length) watch = setInterval(async () => {
       if (checking || watcher.signal.aborted) return;

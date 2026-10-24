@@ -112,7 +112,7 @@ Git prints the questionnaire address and waits:
 
 ```text
 Sphinx: understanding check needed for refs/heads/main (medium change).
-Sphinx: Git is waiting for your answers in the local Sphinx questionnaire. After you pass, confirm whether this Git operation should continue. Do not start another copy of this Git operation.
+Sphinx: Git is waiting for your answers in the local Sphinx questionnaire. After you pass, confirm whether this push should continue. Do not start another copy of this push.
 Sphinx questionnaire: http://127.0.0.1:56114/fSdZM7yg…
 Sphinx: questionnaire opened in a background browser tab. Your coding window stays in place.
 ```
