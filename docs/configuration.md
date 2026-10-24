@@ -248,7 +248,7 @@ Evidence comes from Git objects, not your working files: pre-commit reads the st
 
 ## Background preparation
 
-After commits, merges, rewrites, and checkouts, Sphinx schedules a detached reviewer for the expected destination so questions are ready before you push. It uses local remote-tracking refs and never fetches. It never opens a questionnaire or approves a push.
+After commits, merges, rewrites, and checkouts, Sphinx schedules a detached reviewer for the expected destination so questions are ready before you push. It uses local remote-tracking refs and never fetches. It never opens a questionnaire or approves a push, apart from documentation-only changes, which pass without questions anyway. When the reviewer finds nothing to ask, the push still opens the questionnaire, which says so and asks whether to continue.
 
 - `sphinx status` shows preparation progress; `sphinx prepare` schedules it explicitly; `sphinx prepare --retry` retries a failed job (failures never retry on their own).
 - Preparation and the push check share one assessment, lock, question set, and usage count. A change to source, destination, policy, ignore rules, or context discards prepared work.

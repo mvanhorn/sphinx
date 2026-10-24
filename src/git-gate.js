@@ -83,7 +83,7 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
   // blocked on a questionnaire that can no longer approve this operation.
   const watcher = new AbortController();
   const waitSignal = signal ? AbortSignal.any([signal, watcher.signal]) : watcher.signal;
-  const retry = event === 'pre-commit' ? 'git commit' : 'git push';
+  const retry = event === 'pre-commit' ? 'git commit' : 'git push', op = event === 'pre-commit' ? 'commit' : 'push';
   let checking = false, watch;
   const discarded = () => watcher.signal.aborted && !signal?.aborted;
   try {
@@ -116,11 +116,13 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
     }, watchMs);
     for (let index = 0; index < requests.length; index++) {
       signal?.throwIfAborted();
+      // A push to several destinations asks whether to continue once, after the last one passes.
+      const request = index < requests.length - 1 ? { ...requests[index], more: true } : requests[index];
       // Headless sessions (or interface: terminal) ask in the terminal first; the browser is the fallback.
       let result;
       try {
-        result = !present && prefersTerminal(config, { env }) ? await askInTerminal({ request: requests[index], env: interviewEnv, signal: waitSignal, cwd }) : null;
-        if (!result || result.status === 'unavailable') result = await (present || browser.present)({ request: requests[index], env: interviewEnv, signal: waitSignal });
+        result = !present && prefersTerminal(config, { env }) ? await askInTerminal({ request, env: interviewEnv, signal: waitSignal, cwd }) : null;
+        if (!result || result.status === 'unavailable') result = await (present || browser.present)({ request, env: interviewEnv, signal: waitSignal });
       } catch (error) { if (!discarded()) throw error; }
       if (discarded()) { output(`Sphinx: ${watcher.signal.reason.message}`); return 1; }
       signal?.throwIfAborted();
@@ -135,12 +137,15 @@ export async function runGitGate({ event, args = [], input = '', cwd = process.c
         return 1;
       }
       if (result?.status === 'skipped') { skipped.add(requests[index].id); output('Sphinx: understanding check skipped for this push and logged.'); continue; }
+      // A coding agent reads this output; a saved pass would let its retry through unasked.
       if (result?.status === 'stopped') {
-        output('Sphinx: you passed and stopped this Git operation. Understanding is saved; the operation did not go through. Change the code if you do not want the same change to land, then run the Git command again.');
+        output(`Sphinx: you stopped this ${op} after passing, so it did not go through. Your pass is saved. A coding agent must not retry it unless you ask.`);
         return 1;
       }
       if (result?.status !== 'passed') {
-        output('Sphinx: the understanding check is incomplete, cancelled, or timed out. This Git operation was stopped; progress is saved.');
+        output(await store.approved(pending[index].snapshot, config).catch(() => false)
+          ? `Sphinx: you passed, but this ${op} stopped before you chose to continue, so it did not go through. Your pass is saved. A coding agent must not retry it unless you ask.`
+          : 'Sphinx: the understanding check is incomplete, cancelled, or timed out. This Git operation was stopped; progress is saved.');
         return 1;
       }
     }

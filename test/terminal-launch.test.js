@@ -203,17 +203,29 @@ test('hook delivery privately preserves only normalized Git operation context an
     const child = new EventEmitter(); setImmediate(() => child.emit('exit', 0)); return child;
   } });
   for (const [key, value] of Object.entries(operation)) assert.equal(captured[key], value);
-  assert.equal(captured.SPHINX_WAITING_GIT, '1'); assert.equal(captured.GIT_CONFIG_VALUE_0, undefined);
+  assert.equal(captured.SPHINX_WAITING_GIT, '1'); assert.equal(captured.GIT_CONFIG_VALUE_0, undefined); assert.equal(captured.SPHINX_MORE_CHECKS, undefined);
+});
+
+test('an earlier destination of a waiting push tells its terminal check not to ask to continue yet', async t => {
+  const f = await fixture(t); let captured, bridge;
+  await launchCheckpointTerminal({ ...f.options, request: { ...f.request, delivery: 'hook', more: true }, environmentBridge: async (...args) => { bridge = await createTerminalEnvironmentBridge(...args); return bridge; }, launch: async () => true });
+  t.after(() => bridge.close());
+  const record = await json(f.recordFile);
+  assert.equal(record.more, true);
+  await runCheckpointTerminal({ recordFile: f.recordFile, token: record.token, env: f.env, isTTY: true, spawnImpl: (_command, _args, values) => {
+    captured = values.env; const child = new EventEmitter(); setImmediate(() => child.emit('exit', 0)); return child;
+  } });
+  assert.equal(captured.SPHINX_WAITING_GIT, '1'); assert.equal(captured.SPHINX_MORE_CHECKS, '1');
 });
 
 test('normal after-tool delivery clears ambient Git context and cannot forward hook-only state', async t => {
   const f = await fixture(t); let bridge, captured;
   await launchCheckpointTerminal({ ...f.options, env: { ...f.env, GIT_INDEX_FILE: '/outside/index', GIT_DIR: '/outside/git', SPHINX_WAITING_GIT: '1' }, environmentBridge: async (...args) => { bridge = await createTerminalEnvironmentBridge(...args); return bridge; }, launch: async () => true });
   t.after(() => bridge.close()); const record = await json(f.recordFile); assert.equal(record.waitingGit, false);
-  await runCheckpointTerminal({ recordFile: f.recordFile, token: record.token, env: { ...f.env, GIT_DIR: '/ambient/git', SPHINX_WAITING_GIT: '1' }, isTTY: true, spawnImpl: (_command, _args, values) => {
+  await runCheckpointTerminal({ recordFile: f.recordFile, token: record.token, env: { ...f.env, GIT_DIR: '/ambient/git', SPHINX_WAITING_GIT: '1', SPHINX_MORE_CHECKS: '1' }, isTTY: true, spawnImpl: (_command, _args, values) => {
     captured = values.env; const child = new EventEmitter(); setImmediate(() => child.emit('exit', 1)); return child;
   } });
-  assert.equal(captured.GIT_INDEX_FILE, undefined); assert.equal(captured.GIT_DIR, undefined); assert.equal(captured.SPHINX_WAITING_GIT, undefined);
+  assert.equal(captured.GIT_INDEX_FILE, undefined); assert.equal(captured.GIT_DIR, undefined); assert.equal(captured.SPHINX_WAITING_GIT, undefined); assert.equal(captured.SPHINX_MORE_CHECKS, undefined);
 });
 
 test('an aborted hook launch never opens a GUI or persists a new terminal record', async t => {

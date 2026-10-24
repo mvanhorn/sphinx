@@ -143,13 +143,24 @@ test('stopping after a pass keeps the receipt and does not send the original pus
   await f.release(checkpoint, { status: 'stopped', approve: true });
   const result = await child.finished;
   assert.notEqual(result.code, 0);
-  assert.match(result.stderr, /you passed and stopped this Git operation/);
+  assert.match(result.stderr, /Sphinx: you stopped this push after passing, so it did not go through\. Your pass is saved\. A coding agent must not retry it unless you ask\./);
+  assert.doesNotMatch(result.stderr, /without questions/, 'a coding agent reading Git output is not told a retry would go through');
   await assert.rejects(f.bare('rev-parse', '--verify', 'refs/heads/main'));
   const again = f.start('push', 'origin', 'main');
   const retried = await again.finished;
   assert.equal(retried.code, 0, retried.stderr);
   assert.equal(await f.bare('rev-parse', 'refs/heads/main'), f.baseHead);
   assert.deepEqual(await f.oldCalls(), ['pre-push', 'pre-push']);
+});
+
+test('a check that ends after its pass was saved, without Continue, says so instead of calling the check incomplete', { timeout: 15000 }, async t => {
+  const f = await fixture(t), child = f.start('push', 'origin', 'main');
+  await f.release(await f.ready(child), { status: 'pending', approve: true });
+  const result = await child.finished;
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /Sphinx: you passed, but this push stopped before you chose to continue, so it did not go through\. Your pass is saved\. A coding agent must not retry it unless you ask\./);
+  assert.doesNotMatch(result.stderr, /incomplete/);
+  await assert.rejects(f.bare('rev-parse', '--verify', 'refs/heads/main'));
 });
 
 test('pause, cancellation, and a false terminal success cannot authorize a push or leave forms queued', { timeout: 30000 }, async t => {
@@ -202,6 +213,7 @@ test('one push waits for every protected destination before any ref is sent', { 
   const first = await f.ready(child); await f.release(first);
   const second = await f.ready(child, 1);
   assert.notEqual(first.request.id, second.request.id);
+  assert.deepEqual([first.request.more, second.request.more], [true, undefined], 'only the last destination asks whether to continue');
   assert.deepEqual(new Set([first.snapshot.target.ref, second.snapshot.target.ref]), new Set(['refs/heads/main', 'refs/heads/master']));
   assert.equal(child.exitCode, null);
   assert.equal(await f.bare('for-each-ref', '--format=%(refname)', 'refs/heads'), '');

@@ -282,6 +282,23 @@ test('workers populate the session cache without approval and foreground start r
   assert.equal(foreground.question.id, 'count'); assert.equal(generations, 1);
 });
 
+test('a worker that finds nothing to ask records that without approval; only a started check passes, with no new review', async t => {
+  const { createSessionStore } = await import('../src/sessions.js');
+  const f = await fixture(t); let generations = 0;
+  const store = createSessionStore({ env: f.env, generate: async (_snapshot, _config, options) => {
+    await options.beforeCall(); generations++;
+    return { questions: [], noQuestionReason: 'Only changes an exported constant from one to two.' };
+  } });
+  await schedulePreparation(f.options);
+  const [id] = (await runPreparation({ ...f.options, store })).prepared, session = await store.read(id);
+  assert.equal(session.status, 'pending'); assert.equal(session.expiresAt, null);
+  assert.equal(await store.approved(session.snapshot, f.config), false, 'a waiting push still opens the check, which asks before it continues');
+  assert.equal(store.public(session).noQuestionReason, undefined);
+  const started = await store.start(id, f.config);
+  assert.equal(started.status, 'passed'); assert.equal(started.noQuestionReason, 'Only changes an exported constant from one to two.');
+  assert.equal(generations, 1);
+});
+
 test('the background worker curates the working context once before preparing, with the push range', async t => {
   const f = await fixture(t);
   const curated = [];

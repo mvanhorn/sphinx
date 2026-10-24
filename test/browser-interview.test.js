@@ -10,7 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createBrowserInterview, notifyDesktop, openQuestionnaireBrowser } from '../src/browser-interview.js';
 import { createSessionStore } from '../src/sessions.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { claimCheckpointDialog, checkpointTerminalStatus } from '../src/terminal-launch.js';
+import { claimCheckpointDialog, checkpointTerminalStatus, finishCheckpointDialog } from '../src/terminal-launch.js';
 import { recentOverrides } from '../src/overrides.js';
 import { textStream } from '../src/stream.js';
 
@@ -153,7 +153,7 @@ test('Pause after a receipt was committed stops the interview without revoking o
   await f.post('answer', { response: 'Yes, the insert is repeated.' }); await committed;
   assert.equal(await f.store.approved(f.snapshot, f.config), true);
   const paused = await (await f.post('pause')).json();
-  assert.match(paused.message, /progress is saved, and the waiting push was stopped\. To continue, run the same push again/);
+  assert.match(paused.message, /^Push stopped\. It did not go through, and your progress is saved\. To continue, run the same push again/);
   assert.equal(paused.resume, 'git push', 'says how to continue');
   assert.equal((await done).status, 'pending');
   assert.doesNotMatch(f.interview.state.message, /No approval/);
@@ -593,7 +593,111 @@ test('stopping after a waiting pass keeps the receipt and does not mark this Git
   await f.confirm('stop');
   assert.equal((await done).status, 'stopped');
   assert.equal(f.interview.state.phase, 'stopped');
-  assert.match(f.interview.state.message, /You stopped this Git operation/);
+  assert.equal(f.interview.state.message, 'Push stopped. It did not go through. Your pass is saved, so the same change pushed again goes through without questions. You can close this tab.');
+  assert.equal(f.interview.state.resume, 'git push', 'the same command to push it later, as a pause shows');
+  assert.equal(await f.store.approved(f.snapshot, f.config), true);
+  assert.equal((await checkpointTerminalStatus({ id: f.snapshot.id, env: f.env })).status, 'pending');
+});
+
+const noQuestions = async (_n, options) => { await options.beforeCall(); return { questions: [], noQuestionReason: 'Only renames a local variable; behavior is unchanged.' }; };
+
+test('a pass that needed no questions still asks before the waiting push continues, with one quiet notification', async t => {
+  const sent = [];
+  const f = await fixture(t, { generate: noQuestions, interviewOptions: { notify: message => { sent.push(message); return true; } } });
+  const done = f.present(), consent = await f.waitFor('consent');
+  assert.equal(consent.message, 'No questions needed: Only renames a local variable; behavior is unchanged. Continue the push?');
+  assert.deepEqual(consent.choices.map(choice => [choice.value, choice.label]), [['proceed', 'Continue push'], ['stop', 'Stop push']]);
+  assert.deepEqual(sent.map(message => message.title), ['Sphinx: continue the push?'], 'nobody may be looking at the page yet');
+  assert.equal(await f.store.approved(f.snapshot, f.config), true, 'the pass is already saved');
+  assert.equal((await f.post('skip', { response: 'late' })).status, 409);
+  assert.equal((await f.post('pause')).status, 409);
+  await f.confirm();
+  assert.deepEqual(await done, { status: 'passed', id: f.snapshot.id });
+  assert.equal(f.interview.state.message, 'No questions needed: Only renames a local variable; behavior is unchanged. You can close this tab; Git is finishing the push on its own.');
+  assert.equal(f.graded(), 0); assert.equal(sent.length, 1);
+});
+
+test('a no-questions decision from background preparation is no pass until the page opens, and the push still asks', async t => {
+  const f = await fixture(t, { generate: noQuestions });
+  assert.equal((await f.store.prepare(f.snapshot.id, f.config)).status, 'pending', 'preparation records the decision but approves nothing');
+  assert.equal(await f.store.approved(f.snapshot, f.config), false);
+  const done = f.present(), consent = await f.waitFor('consent');
+  assert.equal(consent.message, 'No questions needed: Only renames a local variable; behavior is unchanged. Continue the push?');
+  assert.equal(f.generated(), 1, 'the prepared decision is reused without another review');
+  await f.confirm('stop');
+  assert.equal((await done).status, 'stopped');
+  assert.equal(await f.store.approved(f.snapshot, f.config), true);
+});
+
+test('a push to several destinations asks to continue once, after the last destination passes', async t => {
+  const f = await fixture(t), second = { ...f.snapshot, id: 'b'.repeat(64), target: { ref: 'refs/heads/master' } };
+  await f.store.ensure(second, f.config);
+  const first = f.present({ ...f.request, more: true }); await f.waitFor('question');
+  await f.post('answer', { response: 'Yes, the insert is repeated.' });
+  assert.deepEqual(await first, { status: 'passed', id: f.snapshot.id }, 'no consent before the next destination');
+  assert.equal(f.interview.state.message, 'You passed. This push has another destination to check next.\nThis records your answers, not a review of every changed line.');
+  const last = f.present({ ...f.request, id: second.id, token: randomUUID() }); await f.waitFor('question');
+  await f.post('answer', { response: 'Yes, the insert is repeated.' });
+  await f.confirm();
+  assert.deepEqual(await last, { status: 'passed', id: second.id });
+  assert.equal(f.interview.state.message, 'You passed. You can close this tab; Git is finishing the push on its own.\nThis records your answers, not a review of every changed line.');
+});
+
+test('a pass made in another window while this page holds a waiting push still asks here before it goes through', async t => {
+  const f = await fixture(t);
+  const other = await claimCheckpointDialog({ request: { ...f.request, token: randomUUID() }, env: f.env, kind: 'browser' });
+  assert.equal(other.status, 'claimed');
+  const done = f.present(); await delay(100);
+  await f.store.start(f.snapshot.id, f.config);
+  await f.store.answer(f.snapshot.id, 'Yes, the insert is repeated.', f.config);
+  await finishCheckpointDialog({ id: f.snapshot.id, token: other.token, status: 'passed', env: f.env });
+  assert.equal((await f.waitFor('consent')).message, 'You passed. Continue the push?');
+  await f.confirm('stop');
+  assert.equal((await done).status, 'stopped');
+});
+
+test('with no Git operation waiting, a pass that needed no questions ends without asking', async t => {
+  const f = await fixture(t, { generate: noQuestions }), { delivery, ...fallback } = f.request;
+  assert.equal(delivery, 'hook');
+  assert.deepEqual(await f.present(fallback), { status: 'passed', id: f.snapshot.id });
+  assert.equal(f.interview.state.phase, 'passed');
+  assert.equal(f.interview.state.message, 'No questions needed: Only renames a local variable; behavior is unchanged. You can close this tab.');
+});
+
+test('a waiting commit is called a commit in its pause message, consent step, and stopped end state', async t => {
+  const commit = { snapshotOverrides: { event: 'pre-commit' } };
+  const paused = await fixture(t, commit);
+  paused.present(); await paused.waitFor('question');
+  const stopped = await (await paused.post('pause')).json();
+  assert.match(stopped.message, /^Commit stopped\. It did not go through, and your progress is saved\. To continue, run the same commit again/);
+  assert.equal(stopped.resume, 'git commit');
+  const f = await fixture(t, commit), done = f.present(); await f.waitFor('question');
+  await f.post('answer', { response: 'Yes, the insert is repeated.' });
+  const consent = await f.waitFor('consent');
+  assert.equal(consent.message, 'You passed. Continue the commit?');
+  assert.deepEqual(consent.choices.map(choice => choice.label), ['Continue commit', 'Stop commit']);
+  assert.deepEqual(consent.choices.map(choice => choice.description), ['Continue: the commit goes through.', 'Stop: it does not go through. Your pass is saved, so the same change committed again goes through without questions.']);
+  assert.match(await (await f.post('skip')).text(), /Choose continue or stop for this commit/);
+  await f.confirm('stop');
+  assert.equal((await done).status, 'stopped');
+  assert.match(f.interview.state.message, /^Commit stopped\. It did not go through\. Your pass is saved, so the same change committed again goes through without questions\. You can close this tab\./);
+  assert.equal(f.interview.state.resume, 'git commit');
+  const continued = await fixture(t, commit), finished = continued.present(); await continued.waitFor('question');
+  await continued.post('answer', { response: 'Yes, the insert is repeated.' });
+  await continued.confirm();
+  assert.equal((await finished).status, 'passed');
+  assert.match(continued.interview.state.message, /^You passed\. You can close this tab; Git is finishing the commit on its own\./);
+});
+
+test('a consent step cut short by Git never lets the operation through and says the pass is saved', async t => {
+  const f = await fixture(t), done = f.present(); await f.waitFor('question');
+  await f.post('answer', { response: 'Yes, the insert is repeated.' });
+  await f.waitFor('consent');
+  f.controller.abort(new Error('Git stopped waiting.'));
+  assert.deepEqual(await done, { status: 'pending', id: f.snapshot.id });
+  assert.equal(f.interview.state.phase, 'paused');
+  assert.equal(f.interview.state.message, 'Git stopped waiting before you chose, so the push did not go through. Your pass is saved, so the same change pushed again goes through without questions.', 'nobody chose Stop');
+  assert.equal(f.interview.state.resume, 'git push');
   assert.equal(await f.store.approved(f.snapshot, f.config), true);
   assert.equal((await checkpointTerminalStatus({ id: f.snapshot.id, env: f.env })).status, 'pending');
 });

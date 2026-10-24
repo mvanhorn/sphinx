@@ -395,7 +395,7 @@ function printSession(session, terminal = ui()) {
     terminal.blank(); terminal.success('Understanding check complete.');
     terminal.paragraph(process.env.SPHINX_WAITING_GIT === '1'
       ? "Approval saved. Return to the original Git output for the operation's result."
-      : 'Approval saved for this exact change and destination. A waiting Git operation can now continue.');
+      : 'Approval saved for this exact change and destination. A waiting push or commit goes through once you choose Continue in its questionnaire.');
     return;
   }
   terminal.blank(); terminal.note(`${session.route.tier} change · ${routeText(session.route)} · ${modelUsageText(session.usage, session.tokens)}`);
@@ -425,7 +425,8 @@ async function checkCommand(values) {
     json(await start()); return 0;
   }
   const controller = new AbortController(), { signal } = controller;
-  const waitingGit = process.env.SPHINX_WAITING_GIT === '1';
+  // More checks may follow in the same push; only the last one asks whether to continue.
+  const waitingGit = process.env.SPHINX_WAITING_GIT === '1', more = waitingGit && process.env.SPHINX_MORE_CHECKS === '1';
   return withReadline(async ask => {
     const terminal = ui();
     if (values['retry-review']) {
@@ -436,7 +437,7 @@ async function checkCommand(values) {
         : `Starting a new review attempt with up to ${config.maxModelCalls} additional model calls, including grading. Previous usage remains counted.`);
     }
     return runTerminalCheck({
-      store, session: await store.read(session.id), config, ask, terminal, signal, waitingGit,
+      store, session: await store.read(session.id), config, ask, terminal, signal, waitingGit, more,
       choose: createPrompts({ ask, ui: terminal }).choose,
       validate: () => validateCheckpoint(session.snapshot, config),
       planProviders: await planProviders().catch(() => []),

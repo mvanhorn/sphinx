@@ -23,6 +23,8 @@ const ID = /^[a-f0-9]{64}$/u;
 const cancelled = () => Object.assign(new Error('Check paused. Progress is saved.'), { code: 'SPHINX_CANCELLED' });
 const equal = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const offLimits = env => env.SPHINX_EVALUATOR === '1' || (env.CI && !['false', '0'].includes(env.CI));
+// A waiting Git operation in the page's words, as its scope line names it.
+const words = event => event === 'pre-commit' ? ['commit', 'Commit', 'committed'] : ['push', 'Push', 'pushed'];
 
 /**
  * A quiet macOS notification that questions are waiting, since the page opens
@@ -85,10 +87,13 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
   let server, origin, url, opened = false, closed = false, active, skip, resolver, sequence = 0, waitingGit = false;
   // A pause stops the waiting Git operation, and this page's server with it, so
   // the only way back is to run it again. Say so, with the command when known.
+  // Cut short at the consent step (only Git or the deadline can), the pass is already saved.
   let resumeCommand = null;
-  const pauseMessage = () => waitingGit
-    ? 'Paused. Your progress is saved, and the waiting push was stopped. To continue, run the same push again; Sphinx reopens at this question.'
-    : 'Paused. Your progress is saved. To continue, run the command below; Sphinx reopens at this question.';
+  const pauseMessage = () => {
+    const [op, Op, done] = words(state.event);
+    if (!waitingGit) return 'Paused. Your progress is saved. To continue, run the command below; Sphinx reopens at this question.';
+    return state.phase === 'consent' ? `Git stopped waiting before you chose, so the ${op} did not go through. Your pass is saved, so the same change ${done} again goes through without questions.` : `${Op} stopped. It did not go through, and your progress is saved. To continue, run the same ${op} again; Sphinx reopens at this question.`;
+  };
   let state = { phase: 'waiting', operationClosed: false, revision: randomUUID(), sequence, message: 'Waiting for the checkpoint.', messages: [] };
   // The chat transcript for the current checkpoint lives only in this process.
   // It contains public questions, feedback, and the human's own text.
@@ -236,8 +241,9 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
       const current = resolver;
       send(res, 200, state); current.resolve(data); return;
     }
+    const consenting = ['proceed', 'stop'].some(action => resolver?.allowed.includes(action));
     if (data.action === 'skip') {
-      if (resolver?.allowed.includes('proceed') || resolver?.allowed.includes('stop')) return send(res, 409, { error: 'Choose continue or stop for this Git operation.' });
+      if (consenting) return send(res, 409, { error: `Choose continue or stop for this ${words(state.event)[0]}.` });
       // Available at any step, including while the review is still running.
       skip = { reason: data.response };
       active.abort(cancelled());
@@ -245,7 +251,7 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
       return send(res, 200, state);
     }
     if (data.action === 'pause') {
-      if (resolver?.allowed.includes('proceed') || resolver?.allowed.includes('stop')) return send(res, 409, { error: 'Choose continue or stop for this Git operation.' });
+      if (consenting) return send(res, 409, { error: `Choose continue or stop for this ${words(state.event)[0]}.` });
       active.abort(cancelled());
       publish({ ...publicFields(state), phase: 'paused', message: pauseMessage(), ...(resumeCommand ? { resume: resumeCommand } : {}) });
       return send(res, 200, state);
@@ -343,7 +349,8 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
       reservation = await reserve({ request, env: operationEnv, kind: 'browser' });
       if (reservation?.status !== 'claimed') {
         const status = await waitForExisting({ id: request.id, env: operationEnv, timeoutMs, signal: localSignal });
-        return { status: status === 'passed' || status === 'stopped' ? status : 'pending', id: request.id };
+        // Passed in another window while Git waits on this one: this page still asks before it goes through.
+        if (status !== 'passed' || !waitingGit || request.more) return { status: status === 'passed' || status === 'stopped' ? status : 'pending', id: request.id };
       }
       const session = await store.read(request.id), config = await readConfig(request.repoRoot, operationEnv);
       if (session.snapshot.repoRoot !== request.repoRoot) throw new Error('This checkpoint belongs to another repository.');
@@ -428,12 +435,13 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
         },
       });
       if (!visible) return skip ? skipped() : { status: 'pending', id: request.id };
+      const where = [repoName || path.basename(request.repoRoot), String(session.snapshot.target?.ref || '').replace(/^refs\/heads\//, '')].filter(Boolean).join(' → ');
       let notified = false;
       while (visible.status !== 'passed') {
         localSignal.throwIfAborted();
         showQuestion(visible); refreshEvidence(request.id);
         // The page opened in a background tab; say once that questions are ready.
-        if (!notified) { notified = true; notify({ title: 'Sphinx needs your answers', message: [repoName || path.basename(request.repoRoot), String(session.snapshot.target?.ref || '').replace(/^refs\/heads\//, '')].filter(Boolean).join(' → '), env: operationEnv }); }
+        if (!notified) { notified = true; notify({ title: 'Sphinx needs your answers', message: where, env: operationEnv }); }
         // Answers can also arrive from sphinx answer or a terminal check. Follow
         // the saved session so this page, and the Git operation waiting on it, keep up.
         const shown = visible;
@@ -497,23 +505,24 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
         }
       }
       localSignal.throwIfAborted(); await validate(session.snapshot, config);
-      if (waitingGit && !visible.noQuestionReason) {
-        const consent = await waitForAction({
-          ...publicFields(visible), repoRoot: request.repoRoot, phase: 'consent',
-          message: 'You passed. Continue this Git operation, or stop it now that you understand the change.',
-          choices: [
-            { value: 'proceed', label: 'Continue this Git operation', description: 'The same push or commit goes through.' },
-            { value: 'stop', label: 'Stop this Git operation', description: 'Your pass is saved. This operation does not go through. Change the code if you do not want the same change to land, then run the Git command again.' },
-          ],
-        }, ['proceed', 'stop']);
+      const [op, Op, done] = words(session.snapshot.event), result = visible.noQuestionReason ? `No questions needed: ${visible.noQuestionReason}` : 'You passed.';
+      const note = visible.noQuestionReason ? '' : '\nThis records your answers, not a review of every changed line.';
+      // A push to several destinations asks once, after the last one passes.
+      if (waitingGit && !request.more) {
+        // A pass that needed no questions can arrive before anyone looked at the page.
+        if (!notified) notify({ title: `Sphinx: continue the ${op}?`, message: where, env: operationEnv });
+        const consent = await waitForAction({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'consent', message: `${result} Continue the ${op}?`, choices: [
+          { value: 'proceed', label: `Continue ${op}`, description: `Continue: the ${op} goes through.` },
+          { value: 'stop', label: `Stop ${op}`, description: `Stop: it does not go through. Your pass is saved, so the same change ${done} again goes through without questions.` },
+        ] }, ['proceed', 'stop']);
         if (consent.action === 'stop') {
           finalStatus = 'pending';
-          publish({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'stopped', message: 'You stopped this Git operation. Your pass is saved. You can close this tab.\nThis records your answers, not a review of every changed line.' });
+          publish({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'stopped', message: `${Op} stopped. It did not go through. Your pass is saved, so the same change ${done} again goes through without questions. You can close this tab.`, ...(resumeCommand ? { resume: resumeCommand } : {}) });
           return { status: 'stopped', id: request.id };
         }
       }
       finalStatus = 'passed';
-      publish({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'passed', message: visible.noQuestionReason ? `No questions needed: ${visible.noQuestionReason} You can close this tab${waitingGit ? '; Git is finishing the push on its own' : ''}.` : waitingGit ? 'You passed. You can close this tab; Git is finishing the push on its own.\nThis records your answers, not a review of every changed line.' : 'You passed. You can close this tab.\nThis records your answers, not a review of every changed line.' });
+      publish({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'passed', message: `${result} ${!waitingGit ? 'You can close this tab.' : request.more ? `This ${op} has another destination to check next.` : `You can close this tab; Git is finishing the ${op} on its own.`}${note}` });
       return { status: 'passed', id: request.id };
     } catch (error) {
       settle('not-graded');

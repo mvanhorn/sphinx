@@ -96,9 +96,11 @@ export function savedDraft(session) {
 // Documentation-only changes need no understanding check and no model call.
 const DOCUMENTATION = /(?:^|\/)(?:readme|license|licence|changelog|changes|authors|contributors|notice|code_of_conduct|contributing)(?:\.[a-z]+)?$|\.(?:md|mdx|markdown|txt|rst|adoc)$/iu;
 export const documentationOnly = files => Array.isArray(files) && files.length > 0 && files.every(file => typeof file === 'string' && DOCUMENTATION.test(file));
-function passWithoutQuestions(session, config, reason) {
-  session.questions = []; session.index = 0; session.status = 'passed'; session.noQuestionReason = reason;
-  session.expiresAt = new Date(Date.now() + config.receiptHours * 3600000).toISOString();
+// Background preparation only records the reviewer's decision (pass = false); the
+// pass is made when someone starts the check, so a waiting push still asks first.
+function passWithoutQuestions(session, config, reason, pass = true) {
+  session.questions = []; session.index = 0; session.noQuestionReason = reason;
+  if (pass) { session.status = 'passed'; session.expiresAt = new Date(Date.now() + config.receiptHours * 3600000).toISOString(); }
   session.preparation = { status: 'ready', completedAt: now() };
   delete session.reviewerCheckpoint;
   session.updatedAt = now();
@@ -231,7 +233,7 @@ export function createSessionStore({ env = process.env, generate = generateAsses
       return publicSession(session);
     }, { signal });
   }
-  async function prepare(id, config, {signal, wait = false, onProgress} = {}) {
+  async function prepare(id, config, {signal, wait = false, onProgress, interactive = false} = {}) {
     return withLock(id,env,async () => {
       signal?.throwIfAborted();
       const session = await read(id);
@@ -246,6 +248,10 @@ export function createSessionStore({ env = process.env, generate = generateAsses
         await validate(session.snapshot, config);
         passWithoutQuestions(session, config, 'Documentation-only change.');
         await save(session);
+        return publicSession(session);
+      }
+      if (!session.questions.length && session.status === 'pending' && session.noQuestionReason) {
+        if (interactive) { await validate(session.snapshot, config); passWithoutQuestions(session, config, session.noQuestionReason); await save(session); }
         return publicSession(session);
       }
       if (!session.questions.length) {
@@ -296,7 +302,7 @@ export function createSessionStore({ env = process.env, generate = generateAsses
             await validate(session.snapshot, config);
             signal?.throwIfAborted();
             if (result.review) session.review = result.review;
-            passWithoutQuestions(session, config, result.noQuestionReason.trim().slice(0, 300));
+            passWithoutQuestions(session, config, result.noQuestionReason.trim().slice(0, 300), interactive);
             await save(session);
             return publicSession(session);
           }
@@ -319,7 +325,7 @@ export function createSessionStore({ env = process.env, generate = generateAsses
       return publicSession(session);
     }, { signal, deadline: wait ? Date.now() + (config.timeoutSeconds + 5) * 1000 : 0 });
   }
-  const start = (id, config, options = {}) => prepare(id, config, { ...options, wait: true });
+  const start = (id, config, options = {}) => prepare(id, config, { ...options, wait: true, interactive: true });
   async function answer(id, text, config, {dispute=false, learn=false, expectedQuestionId, signal} = {}) {
     if (typeof text !== 'string' || !text.trim()) throw new Error('An answer is required.');
     if (text.length > 8000) throw new Error('Please keep your answer below 8,000 characters.');

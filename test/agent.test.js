@@ -24,6 +24,7 @@ for (const agent of ['codex', 'claude']) {
     assert.match(context, /Do not relay questions through chat/);
     assert.match(context, /Never answer on the human's behalf/);
     assert.match(context, /do not repeatedly retry/);
+    assert.match(context, /If the human passes and then stops the push or commit, do not retry it unless they ask/);
     assert.match(context, /sphinx doctor/);
     assert.equal(context.includes('sphinx check --json'), false);
     assert.equal(context.includes('sphinx answer <session-id>'), false);

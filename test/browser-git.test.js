@@ -64,8 +64,8 @@ async function fixture(t) {
   await writeFile(path.join(repo, '.git/hooks/pre-push'), '#!/bin/sh\nprintf "pre-push\\n" >> "$SPHINX_FIXTURE_HOOKS"\ncat > /dev/null\n', { mode: 0o755 });
   const config = { ...structuredClone(DEFAULT_CONFIG), provider: 'claude', model: null, models: Object.fromEntries(['small', 'medium', 'large'].map(tier => [tier, { provider: 'claude', model: null }])), backgroundPreparation: false };
   await saveConfig(config, env); await install({ config, cwd: repo, env, agents: 'none', cliPath: CLI });
-  const startPush = () => {
-    const child = spawn('git', ['push', 'origin', 'main'], { cwd: repo, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const startPush = (args = ['push', 'origin', 'main']) => {
+    const child = spawn('git', args, { cwd: repo, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     children.push(child); let stdout = '', stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
     child.finished = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolve({ code, signal, stdout, stderr })); });
@@ -143,6 +143,47 @@ test('actual default browser hook continues one original push after direct fixtu
   assert.equal(calls.filter(call => call.phase === 'grade').length, 1, 'Pause never grades an answer');
   assert.ok(calls.every(call => !call.leaked), 'Ignored fixture data must never enter any outbound prompt');
   await assert.rejects(fetch(`${nextPage.url}/state`));
+});
+
+test('Stop push after a pass keeps the original push from going through, and the same push later needs no questions', { timeout: 60000 }, async t => {
+  const f = await fixture(t), head = await f.git('rev-parse', 'HEAD');
+  const push = f.startPush(), page = await f.question(push);
+  assert.equal((await f.submit(page, 'answer', 'No. Set membership returns before another insertion in the same process.')).status, 202);
+  const consent = await f.until(push, page.url, 'consent');
+  assert.deepEqual(consent.choices.map(choice => choice.label), ['Continue push', 'Stop push']);
+  assert.equal((await f.submit({ url: page.url, state: consent }, 'stop')).status, 200);
+  const stopped = await push.finished;
+  assert.notEqual(stopped.code, 0);
+  assert.match(stopped.stderr, /you stopped this push after passing, so it did not go through/);
+  assert.doesNotMatch(stopped.stderr, /Set membership returns|Within one running process/);
+  await assert.rejects(f.bare('rev-parse', '--verify', 'refs/heads/main'));
+  const again = await f.startPush().finished;
+  assert.equal(again.code, 0, again.stderr);
+  assert.doesNotMatch(again.stderr, /Sphinx questionnaire:/, 'the saved pass opens no new page');
+  assert.equal(await f.bare('rev-parse', 'refs/heads/main'), head);
+  const calls = (await readFile(f.env.SPHINX_FIXTURE_CALLS, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(calls.filter(call => call.phase === 'grade').length, 1);
+});
+
+test('a push to two protected destinations asks to continue once, after both pass, and Stop keeps both passes', { timeout: 90000 }, async t => {
+  const f = await fixture(t), head = await f.git('rev-parse', 'HEAD'), both = ['push', 'origin', 'main', 'main:master'];
+  const answer = 'No. Set membership returns before another insertion in the same process.';
+  const push = f.startPush(both), page = await f.question(push);
+  assert.equal((await f.submit(page, 'answer', answer)).status, 202);
+  // Reached without a Continue: the first destination never asked.
+  const next = await f.until(push, page.url, 'question');
+  assert.deepEqual([page.state.target, next.target], ['refs/heads/main', 'refs/heads/master']);
+  assert.equal(push.exitCode, null); await assert.rejects(f.bare('rev-parse', '--verify', 'refs/heads/main'));
+  assert.equal((await f.submit({ url: page.url, state: next }, 'answer', answer)).status, 202);
+  const consent = await f.until(push, page.url, 'consent');
+  assert.equal(consent.target, 'refs/heads/master');
+  assert.equal((await f.submit({ url: page.url, state: consent }, 'stop')).status, 200);
+  assert.notEqual((await push.finished).code, 0);
+  await assert.rejects(f.bare('rev-parse', '--verify', 'refs/heads/main'));
+  const again = await f.startPush(both).finished;
+  assert.equal(again.code, 0, again.stderr);
+  assert.doesNotMatch(again.stderr, /Sphinx questionnaire:/, 'both passes are saved, so the same push goes through without questions');
+  assert.deepEqual([await f.bare('rev-parse', 'refs/heads/main'), await f.bare('rev-parse', 'refs/heads/master')], [head, head]);
 });
 
 test('a check passed with sphinx answer while the browser page waits lets the same push continue', { timeout: 60000 }, async t => {

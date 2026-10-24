@@ -117,7 +117,7 @@ Sphinx questionnaire: http://127.0.0.1:56114/fSdZM7yg…
 Sphinx: questionnaire opened in a background browser tab. Your coding window stays in place.
 ```
 
-On macOS, the page opens in a background browser tab. On Linux, WSL, and over SSH, Git prints `open the local URL above to answer` instead, so open the printed address yourself. From a remote session, forward the same port and open the URL unchanged, or run `sphinx check`; see [remote machines](docs/integrations.md#remote-machines-ssh-and-ci). Questions can take a moment while the reviewer reads the change, and the page shows its progress as it works. Beside each question, the page shows the checkpoint's changed files, lines added and removed, a browsable diff, and the code locations the reviewer read for that question. Answer each question with a prediction and a short reason. When you pass, choose **Continue this Git operation** or **Stop this Git operation**. Continue lets the same push go through:
+On macOS, the page opens in a background browser tab. On Linux, WSL, and over SSH, Git prints `open the local URL above to answer` instead, so open the printed address yourself. From a remote session, forward the same port and open the URL unchanged, or run `sphinx check`; see [remote machines](docs/integrations.md#remote-machines-ssh-and-ci). Questions can take a moment while the reviewer reads the change, and the page shows its progress as it works. Beside each question, the page shows the checkpoint's changed files, lines added and removed, a browsable diff, and the code locations the reviewer read for that question. Answer each question with a prediction and a short reason. When you pass, or the reviewer finds nothing to ask, choose **Continue push** or **Stop push**. Continue lets the same push go through:
 
 ```text
 Sphinx: understanding check complete. Continuing this Git operation.
@@ -125,20 +125,20 @@ To github.com:you/your-repo.git
  * [new branch]      main -> main
 ```
 
-Stop keeps the pass and ends this push. Pushing the same change again does not ask questions again. A pass lasts 24 hours, unless the code, destination, or policy changes. Change the code first if you do not want that same change to land.
+**Stop push** ends this push without sending it. Your pass is saved, so pushing the same change again goes through without questions. A pass lasts 24 hours, unless the code, destination, or policy changes. Change the code first if you do not want that same change to land.
 
 ## During and after a check
 
 - **Wrong answer.** You get an explanation and a new scenario about the same concept. Disputes and errors never count as passing.
 - **Explain this.** Shows the concept and asks you a new question.
 - **Dispute question.** Use this if a question's premise is wrong or ambiguous. A bad question must be corrected before that concept can pass.
-- **Pause check.** Saves your progress and stops the push. Run the same `git push` later to pick up where you left off.
-- **Continue or stop.** After you pass, Git still waits. Continue lets the same push or commit go through. Stop keeps the pass and ends this operation. The same change pushed again does not ask questions again unless the code, destination, or policy changed.
+- **Stop push.** Stops the waiting push at any point before you pass: it does not go through, and your progress is saved. Run the same `git push` later to pick up where you left off. For a commit it reads **Stop commit**; with no Git operation waiting, **Pause check**.
+- **Continue or stop.** After you pass, or when no questions are needed, Git still waits for your choice. **Continue push** lets it go through. **Stop push** ends it with your pass saved, so the same change pushed again goes through without questions unless the code, destination, or policy changed.
 - **Closing the tab** doesn't stop anything. Git keeps waiting, and the same address works until the 25-minute deadline.
 - **Skip this time.** Lets the push through immediately, even while the review is still running. Skips never count as passing.
 - **`sphinx yolo`** turns checks off for the current repository, or globally when run outside one. Run it again to turn checks back on. A repository's own setting wins over the global one, so turning yolo off inside a repository keeps checks on there even while global yolo is on. `--reason "prod hotfix"` is optional.
 - **`sphinx check`** runs the same check in your terminal instead of the browser.
-- **Headless or terminal-first.** Over SSH, or anywhere Sphinx can't open the browser in the background, the questions appear right in the terminal where you ran `git push`. Type `/hint`, `/learn`, `/dispute <reason>`, `/skip`, or `/quit` there. To always use the terminal, run `sphinx config --interface terminal`; to always use the browser, use `--interface browser`.
+- **Headless or terminal-first.** Over SSH, or anywhere Sphinx can't open the browser in the background, the questions appear right in the terminal where you ran `git push`. Type `/hint`, `/learn`, `/dispute <reason>`, `/skip`, or `/stop` (`/quit` also works) there, and `continue` or `stop` after you pass. To always use the terminal, run `sphinx config --interface terminal`; to always use the browser, use `--interface browser`.
 - **On GitHub.** With the GitHub CLI (`gh`) signed in, a pass stamps the pushed commit. For a push to a pull request branch, the questionnaire offers "Post the Sphinx stamp to the pull request": a comment summarising the questions and first-try results. Add the Sphinx Action to a repository (`sphinx init --github-check`) and its pull requests show a **Sphinx** check: stamped with that summary, or neutral until the author passes. None of this ever blocks a push. See [GitHub stamps and the Sphinx check](docs/configuration.md#github-commit-status-and-pull-requests).
 
 Every skip and yolo toggle is logged with its reason, and `sphinx status` lists recent ones. If Git exited before you finished, for example because your agent's shell timed out, run the push once more. Never start a second copy while one is still waiting. For more cases, see [troubleshooting](docs/integrations.md#troubleshooting).
