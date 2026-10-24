@@ -110,6 +110,23 @@ test('worker runs exact check ID/cwd in an inherited TTY and records only comple
   assert.equal((await runCheckpointTerminal({ recordFile: f.recordFile, token: record.token, env: f.env, isTTY: true })).status, 'ignored');
 });
 
+test('a window that passed for another Git attempt answers an earlier destination or a fallback, but a waiting push opens its own window to ask', async t => {
+  const f = await fixture(t);
+  await launchCheckpointTerminal({ ...f.options, request: { ...f.request, delivery: 'hook', more: true }, launch: async () => true });
+  // That earlier destination's window passed, and never asked whether to continue, after these requests were queued.
+  await writeFile(f.recordFile, JSON.stringify({ ...await json(f.recordFile), status: 'passed', finishedAt: Date.now() + 1000 }));
+  const queued = { ...f.request, token: randomUUID(), delivery: 'hook' };
+  assert.equal((await launchCheckpointTerminal({ ...f.options, request: { ...queued, more: true }, launch: () => { throw new Error('must not launch'); } })).status, 'passed');
+  assert.equal((await launchCheckpointTerminal({ ...f.options, request: { ...f.request, token: randomUUID() }, launch: () => { throw new Error('must not launch'); } })).status, 'passed', 'a fallback check has nothing waiting to continue');
+  let launches = 0;
+  assert.equal((await launchCheckpointTerminal({ ...f.options, request: queued, launch: async () => { launches++; return true; } })).status, 'opened');
+  const own = await json(f.recordFile);
+  assert.equal(launches, 1); assert.equal(own.presentationToken, queued.token); assert.equal(own.waitingGit, true); assert.equal(own.more, undefined);
+  // A stop typed in another window still stops a waiting push.
+  await writeFile(f.recordFile, JSON.stringify({ ...own, status: 'stopped', finishedAt: Date.now() + 1000 }));
+  assert.equal((await launchCheckpointTerminal({ ...f.options, request: { ...queued, token: randomUUID() }, launch: () => { throw new Error('must not launch'); } })).status, 'stopped');
+});
+
 test('worker records a stopped check when the interview exits 4', async t => {
   const f = await fixture(t);
   await launchCheckpointTerminal({ ...f.options, launch: async () => true });

@@ -12,15 +12,17 @@ flowchart LR
   P --> F[Filter paths]
   F --> S[Exact snapshot]
   S --> R{Valid completion?}
-  R -->|yes| C[Continue original operation]
+  R -->|yes, not held| C[Continue original operation]
+  R -->|held| K[Ask Continue or Stop]
   R -->|no| Q[Save pending checkpoint and wait]
   Q --> I[Local browser questionnaire]
   PQR --> I
   I --> E[Independent evaluator]
   E -->|misconception| L[Explain and ask again, with a new scenario when usable]
   L --> I
-  E -->|all concepts resolved| A[Record completion]
-  A --> V[Revalidate batch and receipts]
+  E -->|all concepts resolved| A[Record completion, held]
+  A --> K
+  K -->|Continue| V[Revalidate batch and receipts]
   V --> C
   Q -->|unavailable| H[Native or manual fallback]
 ```
@@ -28,7 +30,7 @@ flowchart LR
 ## Checkpoint sequence
 
 1. Git supplies the exact source and destination commits. Sphinx applies branch/event policy and filters paths before reading contents.
-2. If the exact change already passed, the operation continues. Otherwise the hook saves a pending checkpoint and keeps the original Git process waiting.
+2. If the exact change already passed and is not held, the operation continues. A held pass, made for an earlier push or commit that stopped before Continue, skips the questions and opens the consent step. Otherwise the hook saves a pending checkpoint and keeps the original Git process waiting.
 3. The hook serves a private questionnaire on loopback and prints its URL. Git's stdin and the coding agent's shell are never used for questionnaire input.
 4. Sphinx reuses matching prepared questions, waits for an in-progress review, or starts a fresh reviewer. The reviewer reads relevant diffs and follows related source and tests before committing questions, private answer keys, and supporting evidence. A separate model request audits the questions against that evidence before display.
 5. Correct answers clear concepts. An incorrect answer gets an explanation and, when the grader proposes a usable one, replaces that concept's question with a different transfer scenario, which receives its own source audit without the human answer or grading conversation. Otherwise the same question stays open. Ambiguity or evaluator failure never creates a completion record.
@@ -84,7 +86,7 @@ Human terminal output provides a compact ASCII mark, explanatory selections, and
 
 A blocking Git hook saves pending assessments and hook-owned presentation requests, then serves a local browser questionnaire while the original Git process waits. On macOS, `open -g` opens the page in the background without activating or minimizing applications. Elsewhere Sphinx prints the local URL instead of guessing window-manager focus behavior. It never automatically opens Terminal for a questionnaire. The batch reuses one page for all destinations. Hook-owned requests are invisible to native after-tool callbacks, which cannot run until the original shell tool finishes. Browser, native, and terminal transports share a per-checkpoint reservation to prevent duplicate questionnaires.
 
-Human answers go straight from the browser to the independent evaluator. Neither questions nor responses enter client hook results, and Git protocol stdin remains untouched. After a pass while Git is waiting, including one that needed no questions, the questionnaire or terminal check asks whether to continue the original push or commit; a push to several destinations asks once, after the last one passes. Stop keeps the receipt and returns nonzero so Git does not go through; an identical later push can continue without new questions. Git's output after a stop, or after the time limit ends the step with the pass saved, tells a coding agent not to retry unless the human asks. Continue reloads policy and revalidates every original snapshot and receipt, including previously approved destinations, before returning zero to the same Git process. Existing hooks run once before snapshot collection; commands, refspecs, force flags, stdin, and remotes are never reconstructed or replayed. Git retains its own remote-update concurrency checks.
+Human answers go straight from the browser to the independent evaluator. Neither questions nor responses enter client hook results, and Git protocol stdin remains untouched. After a pass while Git is waiting, including one that needed no questions, the questionnaire or terminal check asks whether to continue the original push or commit; a push to several destinations asks once, after the last one passes. Stop keeps the receipt and returns nonzero so Git does not go through. A pass made for a waiting operation is saved held, in the same locked write as the pass, so it approves nothing until the Git gate sees Continue; only then does the gate clear the hold on every pass in the push. That still applies when the hook is killed or a terminal window outlives it. When the operation ends before Git continues (Stop, the time limit, a cancellation, or a discarded check), the gate also holds any other pass among its requests, such as one made with `sphinx answer` while it waited. A held receipt is reused but does not approve Git: an identical later push or commit opens the questionnaire at the consent step, with no questions and no model call. A pass in a terminal window opened for another Git attempt never counts as this operation's Continue; its own window asks. Passes made while no Git operation waits (`sphinx check`, `sphinx answer`, fallback forms), and documentation-only changes passed in the hook without a page, are not held. Git's output after a stop, a cancellation, or the time limit with the pass saved tells a coding agent not to retry unless the human asks. Continue reloads policy and revalidates every original snapshot and receipt, including previously approved destinations, before returning zero to the same Git process. Existing hooks run once before snapshot collection; commands, refspecs, force flags, stdin, and remotes are never reconstructed or replayed. Git retains its own remote-update concurrency checks.
 
 The HTTP listener binds only to `127.0.0.1` on an ephemeral port and requires a random URL token. Responses are not cached; CSP prevents third-party assets, frames, and form navigation. POST requests require the exact host, origin, token header, current checkpoint/revision, and current question ID. The page renders all source/model text with `textContent`. Questions and feedback are public assessment fields; answer keys, rubrics, and retained source observations are never served. Provider calls stay in the hook process with its normalized Git context, preserving temporary indexes and explicit Git directories without exposing credentials or Git context in launch arguments. SSE carries current state; reconnects do not replay submissions, and monotonic updates prevent a delayed POST response from overwriting a newer question or completion.
 

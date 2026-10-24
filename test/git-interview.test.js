@@ -23,8 +23,16 @@ test('the Git hook waits for direct human terminal completion without changing q
 
 test('a concurrent launch lock reuses its existing interview and terminal passed status is only forwarded to the gate', async () => {
   let calls = 0, waits = 0;
-  const result = await runGitCheckpointTerminal({ ...options, launch: async () => ({ status: ++calls === 1 ? 'busy' : 'already-open' }), waitForResult: async () => { waits++; return 'passed'; } });
+  const more = { ...request, more: true };
+  const result = await runGitCheckpointTerminal({ ...options, request: more, launch: async () => ({ status: ++calls === 1 ? 'busy' : 'already-open' }), waitForResult: async () => { waits++; return 'passed'; } });
   assert.deepEqual(result, { status: 'passed', id }); assert.equal(calls, 2); assert.equal(waits, 1);
+  // The last destination asks whether to continue; another window's pass never answered that, so its own window opens.
+  calls = 0; waits = 0; const launched = [];
+  const asked = await runGitCheckpointTerminal({ ...options, launch: async values => { launched.push(values.request); if (++calls > 4) throw new Error('relaunch loop'); return { status: calls === 1 ? 'already-open' : 'opened' }; }, waitForResult: async () => { waits++; return 'passed'; } });
+  assert.deepEqual(asked, { status: 'passed', id }); assert.equal(calls, 2); assert.equal(waits, 2);
+  assert.deepEqual(launched, [request, request]);
+  const stoppedThere = await runGitCheckpointTerminal({ ...options, launch: async () => ({ status: 'already-open' }), waitForResult: async () => 'stopped' });
+  assert.deepEqual(stoppedThere, { status: 'stopped', id }, 'a stop in that window still stops this push');
   const cached = await runGitCheckpointTerminal({ ...options, launch: async () => ({ status: 'passed' }), waitForResult: () => assert.fail('must not wait again') });
   assert.deepEqual(cached, { status: 'passed', id });
   const stopped = await runGitCheckpointTerminal({ ...options, launch: async () => ({ status: 'stopped' }), waitForResult: () => assert.fail('must not wait after stop') });

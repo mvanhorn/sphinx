@@ -665,3 +665,104 @@ test('a renamed replacement id skips every id the check has used and stays withi
   for (const old of shown.slice(0, -1)) await assert.rejects(store.answer(medium.id, 'A late answer.', config, { expectedQuestionId: old }), { code: 'SPHINX_STALE_QUESTION' }, old);
   assert.equal(graded.length, 3, 'A stale answer is never graded');
 });
+
+test('a held pass is reused and starts as passed with no model call, but approves no Git operation until it is confirmed', async t => {
+  let reviews = 0, grades = 0;
+  const { store, config } = await fixture(t, { generate: async () => { reviews++; return { questions: [q] }; }, grade: async () => { grades++; return { verdict: 'correct', feedback: 'Correct.', followUp: null }; } });
+  await store.ensure(snapshot, config); await store.start(snapshot.id, config);
+  assert.equal(await store.hold(snapshot.id, config), false, 'an unfinished check has no pass to hold');
+  assert.equal('held' in await store.read(snapshot.id), false);
+  await store.answer(snapshot.id, 'Yes: it inserts every time.', config);
+  assert.equal(await store.hold(snapshot.id, config), true);
+  const { held } = await store.read(snapshot.id);
+  assert.ok(Date.parse(held.at) > 0);
+  assert.equal(await store.approved(snapshot, config), false, 'Git does not take a held pass as approval');
+  assert.equal(await store.hold(snapshot.id, config), true);
+  assert.deepEqual((await store.read(snapshot.id)).held, held, 'holding again leaves the hold as it was');
+  const reused = await store.ensure(snapshot, config);
+  assert.equal(reused.status, 'passed', 'the pass is kept instead of starting a new check');
+  assert.deepEqual(reused.held, held);
+  const started = await store.start(snapshot.id, config);
+  assert.equal(started.status, 'passed'); assert.equal(started.held, true); assert.equal(started.question, undefined);
+  assert.equal((await store.answer(snapshot.id, 'A late answer.', config)).status, 'passed');
+  assert.deepEqual([reviews, grades], [1, 1], 'nothing is reviewed or graded again');
+  assert.deepEqual(await store.pending(snapshot.repoRoot), [], 'a held pass is not a pending check');
+  assert.equal(await store.confirm(snapshot.id, { ...config, level: 'thorough' }), false, 'only under the policy it passed with');
+  assert.equal(await store.approved(snapshot, config), false);
+  assert.equal(await store.confirm(snapshot.id, config), true);
+  assert.equal(await store.approved(snapshot, config), true);
+  assert.equal('held' in await store.read(snapshot.id), false);
+  assert.equal('held' in await store.start(snapshot.id, config), false);
+  assert.equal(await store.confirm(snapshot.id, config), false, 'nothing is left to confirm');
+});
+
+test('a session saved without a hold is approved as before, and a hold is added to what is on disk', async t => {
+  const { store, env, config } = await fixture(t);
+  await store.ensure(snapshot, config); await store.start(snapshot.id, config); await store.answer(snapshot.id, 'Yes.', config);
+  // Sessions written before holds existed look like this one: passed, with no held field.
+  const record = await store.read(snapshot.id);
+  assert.equal('held' in record, false);
+  assert.equal(await store.approved(snapshot, config), true);
+  assert.equal('held' in store.public(record), false);
+  assert.equal(await store.hold(snapshot.id, { ...config, level: 'thorough' }), false, 'not under another policy');
+  assert.equal(await store.approved(snapshot, config), true);
+  // Another process saved the session after this one last read it.
+  await writeJson(sessionFile(snapshot.id, env), { ...record, lastFeedback: 'Saved by another process.' });
+  assert.equal(await store.hold(snapshot.id, config), true);
+  const saved = await store.read(snapshot.id);
+  assert.equal(saved.lastFeedback, 'Saved by another process.', 'a hold never overwrites what it did not set');
+  assert.equal(saved.status, 'passed'); assert.equal(saved.expiresAt, record.expiresAt);
+  // The hold ends with the receipt: an expired one is not held or reused.
+  await writeJson(sessionFile(snapshot.id, env), { ...saved, expiresAt: '2000-01-01T00:00:00.000Z' });
+  assert.equal(await store.hold(snapshot.id, config), false);
+  assert.equal(await store.confirm(snapshot.id, config), false);
+  const fresh = await store.ensure(snapshot, config);
+  assert.equal(fresh.status, 'pending'); assert.equal('held' in fresh, false);
+});
+
+test('holding a pass waits briefly for another process to release the session lock instead of giving up', async t => {
+  const { store, env, config } = await fixture(t);
+  await store.ensure(snapshot, config); await store.start(snapshot.id, config); await store.answer(snapshot.id, 'Yes.', config);
+  const lock = `${sessionFile(snapshot.id, env)}.lock`;
+  await writeFile(lock, JSON.stringify({ pid: process.pid }), { mode: 0o600 });
+  const holding = store.hold(snapshot.id, config);
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal('held' in await store.read(snapshot.id), false, 'nothing is written while the lock is taken');
+  await rm(lock);
+  assert.equal(await holding, true);
+  assert.equal(await store.approved(snapshot, config), false);
+});
+
+test('a pass made for a waiting Git operation is saved held in the same write, by an answer or with no questions; without one it is a plain receipt', async t => {
+  const answered = await fixture(t);
+  await answered.store.ensure(snapshot, answered.config); await answered.store.start(snapshot.id, answered.config, { hold: true });
+  assert.equal('held' in await answered.store.read(snapshot.id), false, 'nothing is held before a pass exists');
+  const passed = await answered.store.answer(snapshot.id, 'Yes: it inserts every time.', answered.config, { hold: true });
+  assert.equal(passed.status, 'passed'); assert.equal(passed.held, true);
+  assert.ok(Date.parse((await answered.store.read(snapshot.id)).held.at) > 0);
+  assert.equal(await answered.store.approved(snapshot, answered.config), false);
+  assert.equal((await answered.store.ensure(snapshot, answered.config)).status, 'passed', 'and it is reused, not asked again');
+  assert.equal(await answered.store.confirm(snapshot.id, answered.config), true);
+  assert.equal(await answered.store.approved(snapshot, answered.config), true);
+  // No questions: decided while Git waits, or prepared in the background and passed when the check opens.
+  const review = { toolCalls: 1, compactions: 0 };
+  const none = await fixture(t, { generate: async (_s, _c, { beforeCall }) => { await beforeCall(); return { questions: [], noQuestionReason: 'Only renames a local variable; behavior is unchanged.', review }; } });
+  await none.store.ensure(snapshot, none.config);
+  assert.equal((await none.store.start(snapshot.id, none.config, { hold: true })).held, true);
+  assert.equal(await none.store.approved(snapshot, none.config), false);
+  const prepared = await fixture(t, { generate: async (_s, _c, { beforeCall }) => { await beforeCall(); return { questions: [], noQuestionReason: 'Only renames a local variable; behavior is unchanged.', review }; } });
+  await prepared.store.ensure(snapshot, prepared.config); await prepared.store.prepare(snapshot.id, prepared.config);
+  assert.equal((await prepared.store.start(snapshot.id, prepared.config, { hold: true })).held, true);
+  const docs = await fixture(t), readme = { ...snapshot, id: 'c'.repeat(64), files: ['README.md'] };
+  await docs.store.ensure(readme, docs.config);
+  assert.equal((await docs.store.start(readme.id, docs.config, { hold: true })).held, true);
+  // A manual check, sphinx answer, or a fallback form passes without a hold, as before.
+  const manual = await fixture(t);
+  await manual.store.ensure(snapshot, manual.config); await manual.store.start(snapshot.id, manual.config);
+  assert.equal('held' in await manual.store.answer(snapshot.id, 'Yes: it inserts every time.', manual.config), false);
+  assert.equal(await manual.store.approved(snapshot, manual.config), true);
+  const plain = await fixture(t, { generate: async (_s, _c, { beforeCall }) => { await beforeCall(); return { questions: [], noQuestionReason: 'Only renames a local variable; behavior is unchanged.', review }; } });
+  await plain.store.ensure(snapshot, plain.config);
+  assert.equal('held' in await plain.store.start(snapshot.id, plain.config), false);
+  assert.equal(await plain.store.approved(snapshot, plain.config), true);
+});

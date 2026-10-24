@@ -208,7 +208,10 @@ export async function launchCheckpointTerminal({ request, env = process.env, pla
     signal?.throwIfAborted();
     const previous = await checkpointTerminalStatus({ id: request.id, env, isAlive });
     if (['starting', 'running'].includes(previous?.status)) return { status: 'already-open', id: request.id };
-    if (['passed', 'stopped'].includes(previous?.status) && request.createdAt <= previous.finishedAt) return { status: previous.status, id: request.id };
+    // Another window's pass never answers whether this waiting push or commit continues
+    // (it may not have asked, as an earlier destination's does not): its own window asks.
+    const asks = request.delivery === 'hook' && !request.more;
+    if ((previous?.status === 'stopped' || (previous?.status === 'passed' && !asks)) && request.createdAt <= previous.finishedAt) return { status: previous.status, id: request.id };
     if (previous?.presentationToken === request.token) return { status: 'suppressed', id: request.id };
     const record = { version: 1, id: request.id, token: randomUUID(), presentationToken: request.token, repoRoot: request.repoRoot, home, cliPath, kind: 'terminal', waitingGit: request.delivery === 'hook', ...(request.more ? { more: true } : {}), status: 'starting', createdAt: Date.now(), updatedAt: Date.now() };
     await writeJson(file, record);

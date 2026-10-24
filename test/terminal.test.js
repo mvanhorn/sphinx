@@ -60,7 +60,7 @@ test('check help names /stop for a waiting Git operation and says what stop mean
   const output = capture(); printHelp(output.ui, 'check');
   const text = stripAnsi(output.text()).replace(/\s+/g, ' ');
   assert.match(text, /\/stop While a Git operation waits: stop it now\. It does not go through, and progress is saved\. \/quit does the same\./);
-  assert.match(text, /a pass \(including one that needs no questions\) asks you to continue or stop it, within its time limit; stop means it does not go through, and the pass is kept\./);
+  assert.match(text, /a pass \(including one that needs no questions\) asks you to continue or stop it, within its time limit; stop means it does not go through, and the pass is kept, so the next push or commit of that change asks only whether to continue\./);
 });
 
 test('status rows and narrow banners fit without decorative boxes or blue colors', () => {

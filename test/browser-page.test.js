@@ -331,7 +331,7 @@ test('passing shows a clear end state that says the tab can be closed', () => {
 
 const consent = { ...question, sequence: 2, phase: 'consent', question: undefined, message: 'You passed. Continue the push?', choices: [
   { value: 'proceed', label: 'Continue push', description: 'Continue: the push goes through.' },
-  { value: 'stop', label: 'Stop push', description: 'Stop: it does not go through. Your pass is saved, so the same change pushed again goes through without questions.' },
+  { value: 'stop', label: 'Stop push', description: 'Stop: it does not go through. Your pass is saved, so the next push of this change asks only whether to continue.' },
 ] };
 
 test('consent after a waiting pass is one row, Continue in amber and Stop plain, explained in one line', async () => {
@@ -347,7 +347,7 @@ test('consent after a waiting pass is one row, Continue in amber and Stop plain,
   assert.equal(row.className, 'actions');
   assert.deepEqual(row.children.map(button => [button.textContent, button.className]), [['Continue push', 'primary'], ['Stop push', '']], 'red stays reserved for skipping the check');
   assert.equal(note.className, 'hint');
-  assert.equal(note.textContent, 'Continue: the push goes through. Stop: it does not go through. Your pass is saved, so the same change pushed again goes through without questions.');
+  assert.equal(note.textContent, 'Continue: the push goes through. Stop: it does not go through. Your pass is saved, so the next push of this change asks only whether to continue.');
   assert.equal(p.nodes.skip.hidden, true); assert.equal(p.nodes.pause.hidden, true); assert.equal(p.nodes.composer.hidden, true);
   assert.equal(p.nodes.waiting.textContent, 'The push waits for your choice. Closing this tab leaves it waiting.');
   assert.equal(p.context.document.title, '● Sphinx: continue the push?');
@@ -357,7 +357,7 @@ test('consent after a waiting pass is one row, Continue in amber and Stop plain,
   assert.equal(p.nodes.status.textContent, 'Passed'); assert.equal(p.nodes.consent.hidden, true);
 });
 
-const stopped = { ...question, sequence: 3, phase: 'stopped', question: undefined, resume: 'git push origin main', message: 'Push stopped. It did not go through. Your pass is saved, so the same change pushed again goes through without questions. You can close this tab.' };
+const stopped = { ...question, sequence: 3, phase: 'stopped', question: undefined, resume: 'git push origin main', message: 'Push stopped. It did not go through. Your pass is saved, so the next push of this change asks only whether to continue. You can close this tab.' };
 
 test('on a phone, consent comes into view on the Question tab with its buttons last, and the outcome after a choice stays in view', () => {
   const p = page(undefined, { narrow: true }), scrolled = [];

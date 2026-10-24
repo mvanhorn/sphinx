@@ -117,7 +117,7 @@ Sphinx questionnaire: http://127.0.0.1:56114/fSdZM7yg…
 Sphinx: questionnaire opened in a background browser tab. Your coding window stays in place.
 ```
 
-On macOS, the page opens in a background browser tab. On Linux, WSL, and over SSH, Git prints `open the local URL above to answer` instead, so open the printed address yourself. From a remote session, forward the same port and open the URL unchanged, or run `sphinx check`; see [remote machines](docs/integrations.md#remote-machines-ssh-and-ci). Questions can take a moment while the reviewer reads the change, and the page shows its progress as it works. Beside each question, the page shows the checkpoint's changed files, lines added and removed, a browsable diff, and the code locations the reviewer read for that question. Answer each question with a prediction and a short reason. When you pass, or the reviewer finds nothing to ask, choose **Continue push** or **Stop push**. Continue lets the same push go through:
+On macOS, the page opens in a background browser tab. On Linux, WSL, and over SSH, Git prints `open the local URL above` instead, so open the printed address yourself. From a remote session, forward the same port and open the URL unchanged, or run `sphinx check`; see [remote machines](docs/integrations.md#remote-machines-ssh-and-ci). Questions can take a moment while the reviewer reads the change, and the page shows its progress as it works. Beside each question, the page shows the checkpoint's changed files, lines added and removed, a browsable diff, and the code locations the reviewer read for that question. Answer each question with a prediction and a short reason. When you pass, or the reviewer finds nothing to ask, choose **Continue push** or **Stop push**. Continue lets the same push go through:
 
 ```text
 Sphinx: understanding check complete. Continuing this Git operation.
@@ -125,7 +125,7 @@ To github.com:you/your-repo.git
  * [new branch]      main -> main
 ```
 
-**Stop push** ends this push without sending it. Your pass is saved, so pushing the same change again goes through without questions. A pass lasts 24 hours, unless the code, destination, or policy changes. Change the code first if you do not want that same change to land.
+**Stop push** ends this push without sending it. Your pass is saved, so pushing the same change again asks only whether to continue, with no new questions. The same happens if Git stops waiting before you choose. A pass lasts 24 hours, unless the code, destination, or policy changes.
 
 ## During and after a check
 
@@ -133,7 +133,7 @@ To github.com:you/your-repo.git
 - **Explain this.** Shows the concept and asks you a new question, or the same one again if no usable new scenario comes back.
 - **Dispute question.** Use this if a question's premise is wrong or ambiguous. A bad question must be corrected before that concept can pass.
 - **Stop push.** Stops the waiting push at any point before you pass: it does not go through, and your progress is saved. Run the same `git push` later to pick up where you left off. For a commit it reads **Stop commit**; with no Git operation waiting, **Pause check**.
-- **Continue or stop.** After you pass, or when no questions are needed, Git still waits for your choice. **Continue push** lets it go through. **Stop push** ends it with your pass saved, so the same change pushed again goes through without questions unless the code, destination, or policy changed.
+- **Continue or stop.** After you pass, or when no questions are needed, Git still waits for your choice. **Continue push** lets it go through. **Stop push** ends it with your pass saved, so pushing the same change again asks only whether to continue, unless the code, destination, or policy changed.
 - **Closing the tab** doesn't stop anything. Git keeps waiting, and the same address works until the 25-minute deadline.
 - **Skip this time.** Lets the push through immediately, even while the review is still running. Skips never count as passing.
 - **`sphinx yolo`** turns checks off for the current repository, or globally when run outside one. Run it again to turn checks back on. A repository's own setting wins over the global one, so turning yolo off inside a repository keeps checks on there even while global yolo is on. `--reason "prod hotfix"` is optional.

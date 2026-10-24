@@ -45,6 +45,11 @@ async function withLock(id, env, operation, { signal, deadline = 0 } = {}) {
     return await operation();
   } finally { await handle.close(); await unlink(file).catch(() => {}); }
 }
+// A held pass (session.held, see hold()) is still a valid receipt: it is reused
+// and starts as passed. Only approved() refuses it, so Git asks again first.
+// A pass made for a waiting push or commit is saved held (prepare and answer
+// with hold), so it approves nothing until the Git gate sees Continue, even
+// if that gate is killed or a window outlives it.
 function validReceipt(session, config) {
   return session?.status === 'passed' && session.policy === policyHash(config) && Date.parse(session.expiresAt) > Date.now();
 }
@@ -98,9 +103,9 @@ const DOCUMENTATION = /(?:^|\/)(?:readme|license|licence|changelog|changes|autho
 export const documentationOnly = files => Array.isArray(files) && files.length > 0 && files.every(file => typeof file === 'string' && DOCUMENTATION.test(file));
 // Background preparation only records the reviewer's decision (pass = false); the
 // pass is made when someone starts the check, so a waiting push still asks first.
-function passWithoutQuestions(session, config, reason, pass = true) {
+function passWithoutQuestions(session, config, reason, pass = true, hold = false) {
   session.questions = []; session.index = 0; session.noQuestionReason = reason;
-  if (pass) { session.status = 'passed'; session.expiresAt = new Date(Date.now() + config.receiptHours * 3600000).toISOString(); }
+  if (pass) { session.status = 'passed'; session.expiresAt = new Date(Date.now() + config.receiptHours * 3600000).toISOString(); if (hold) session.held = { at: now() }; }
   session.preparation = { status: 'ready', completedAt: now() };
   delete session.reviewerCheckpoint;
   session.updatedAt = now();
@@ -119,7 +124,7 @@ export function publicSession(session) {
     // Concept labels are evaluator metadata and may themselves reveal the answer.
     ...(q && session.status !== 'passed' ? { question: { id: q.id, prompt: q.prompt, choices: q.choices } } : {}),
     ...(session.lastFeedback ? { feedback: session.lastFeedback } : {}),
-    ...(session.status === 'passed' ? { expiresAt: session.expiresAt, ...(session.noQuestionReason ? { noQuestionReason: session.noQuestionReason } : {}) } : {}),
+    ...(session.status === 'passed' ? { expiresAt: session.expiresAt, ...(session.noQuestionReason ? { noQuestionReason: session.noQuestionReason } : {}), ...(session.held ? { held: true } : {}) } : {}),
   };
 }
 
@@ -197,11 +202,34 @@ export function createSessionStore({ env = process.env, generate = generateAsses
     // Reading under that same lock also prevents observing an old receipt inode
     // across an entire write-and-rollback cycle.
     try {
-      return await withLock(snapshot.id, env, async () => validReceipt(await readJson(sessionFile(snapshot.id, env), null), config));
+      return await withLock(snapshot.id, env, async () => { const session = await readJson(sessionFile(snapshot.id, env), null); return validReceipt(session, config) && !session.held; });
     } catch (error) {
       if (error.code === 'SPHINX_SESSION_BUSY') return false;
       throw error;
     }
+  }
+  // Only the Git gate calls these, once its interview has ended, so a brief wait
+  // for another reader's lock is enough. A pass made for it is already held; hold()
+  // covers one made elsewhere (sphinx answer, a manual check) that it then saw stopped.
+  const briefly = () => ({ deadline: Date.now() + 5000 });
+  /** Hold a pass whose waiting push or commit did not go through: the next one asks only whether to continue. */
+  async function hold(id, config) {
+    return withLock(id, env, async () => {
+      const session = await readJson(sessionFile(id, env), null);
+      if (!validReceipt(session, config)) return false;
+      if (!session.held) { session.held = { at: now() }; session.updatedAt = session.held.at; await save(session); }
+      return true;
+    }, briefly());
+  }
+  /** Clear the hold once Continue is chosen, so later operations of this change go through as before. */
+  async function confirm(id, config) {
+    return withLock(id, env, async () => {
+      const session = await readJson(sessionFile(id, env), null);
+      if (!session?.held || !validReceipt(session, config)) return false;
+      delete session.held; session.updatedAt = now();
+      await save(session);
+      return true;
+    }, briefly());
   }
   async function retryReview(id, config, { signal } = {}) {
     return withLock(id, env, async () => {
@@ -233,7 +261,7 @@ export function createSessionStore({ env = process.env, generate = generateAsses
       return publicSession(session);
     }, { signal });
   }
-  async function prepare(id, config, {signal, wait = false, onProgress, interactive = false} = {}) {
+  async function prepare(id, config, {signal, wait = false, onProgress, interactive = false, hold = false} = {}) {
     return withLock(id,env,async () => {
       signal?.throwIfAborted();
       const session = await read(id);
@@ -246,12 +274,12 @@ export function createSessionStore({ env = process.env, generate = generateAsses
       signal?.throwIfAborted();
       if (!session.questions.length && session.status === 'pending' && documentationOnly(session.snapshot.files)) {
         await validate(session.snapshot, config);
-        passWithoutQuestions(session, config, 'Documentation-only change.');
+        passWithoutQuestions(session, config, 'Documentation-only change.', true, hold);
         await save(session);
         return publicSession(session);
       }
       if (!session.questions.length && session.status === 'pending' && session.noQuestionReason) {
-        if (interactive) { await validate(session.snapshot, config); passWithoutQuestions(session, config, session.noQuestionReason); await save(session); }
+        if (interactive) { await validate(session.snapshot, config); passWithoutQuestions(session, config, session.noQuestionReason, true, hold); await save(session); }
         return publicSession(session);
       }
       if (!session.questions.length) {
@@ -302,7 +330,7 @@ export function createSessionStore({ env = process.env, generate = generateAsses
             await validate(session.snapshot, config);
             signal?.throwIfAborted();
             if (result.review) session.review = result.review;
-            passWithoutQuestions(session, config, result.noQuestionReason.trim().slice(0, 300), interactive);
+            passWithoutQuestions(session, config, result.noQuestionReason.trim().slice(0, 300), interactive, hold);
             await save(session);
             return publicSession(session);
           }
@@ -326,7 +354,7 @@ export function createSessionStore({ env = process.env, generate = generateAsses
     }, { signal, deadline: wait ? Date.now() + (config.timeoutSeconds + 5) * 1000 : 0 });
   }
   const start = (id, config, options = {}) => prepare(id, config, { ...options, wait: true, interactive: true });
-  async function answer(id, text, config, {dispute=false, learn=false, expectedQuestionId, signal} = {}) {
+  async function answer(id, text, config, {dispute=false, learn=false, expectedQuestionId, signal, hold=false} = {}) {
     if (typeof text !== 'string' || !text.trim()) throw new Error('An answer is required.');
     if (text.length > 8000) throw new Error('Please keep your answer below 8,000 characters.');
     return withLock(id,env,async () => {
@@ -390,6 +418,7 @@ export function createSessionStore({ env = process.env, generate = generateAsses
           signal?.throwIfAborted();
           session.status = 'passed';
           session.expiresAt = new Date(Date.now()+config.receiptHours*3600000).toISOString();
+          if (hold) session.held = { at: now() };
         }
       } else if (result.followUp) {
         if (result.followUp.prompt.trim() === question.prompt.trim()) throw new Error('The evaluator repeated the question. Retry; no concept was marked complete.');
@@ -491,5 +520,5 @@ export function createSessionStore({ env = process.env, generate = generateAsses
       return true;
     }).catch(error => { if (error.code === 'SPHINX_SESSION_BUSY') return false; throw error; });
   }
-  return {passTrivial,ensure,approved,prepare,start,retryReview,refreshBudget,answer,pending,read,skip,discard,switchRoute,public:publicSession};
+  return {passTrivial,ensure,approved,hold,confirm,prepare,start,retryReview,refreshBudget,answer,pending,read,skip,discard,switchRoute,public:publicSession};
 }

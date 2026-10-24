@@ -8,20 +8,20 @@ import { prefersTerminal, runGitTerminalCheck } from '../src/git-interview.js';
 import { DEFAULT_CONFIG, policyHash, validateConfig, validateRepositoryConfig } from '../src/config.js';
 
 const question = (id, prompt, extra = {}) => ({ id, prompt, choices: [], ...extra });
-function harness({ answers, results, waitingGit = false, more = false, started, event = 'pre-push', width = 80 }) {
+function harness({ answers, results, waitingGit = false, more = false, started, event = 'pre-push', width = 80, held = false }) {
   let output = '';
   const stream = new Writable({ write(chunk, _e, done) { output += chunk; done(); } });
   const q1 = question('q1', 'What happens on redelivery?\u001b[2J', { evidence: [{ path: 'src/jobs/charge.js', reason: 'PRIVATE_REASON' }] });
-  const session = { id: 'x', questions: [q1], route: { provider: 'claude', model: 'sonnet' }, snapshot: { repoRoot: '/work/billing', event, target: { remote: 'origin', ref: 'refs/heads/main' }, stats: { files: 2, additions: 10, deletions: 1 } } };
-  const sent = [], skips = [], prompts = [];
+  const session = { id: 'x', questions: [q1], ...(held ? { status: 'passed', held: { at: '2026-10-23T00:00:00.000Z' } } : {}), route: { provider: 'claude', model: 'sonnet' }, snapshot: { repoRoot: '/work/billing', event, target: { remote: 'origin', ref: 'refs/heads/main' }, stats: { files: 2, additions: 10, deletions: 1 } } };
+  const sent = [], skips = [], prompts = [], starts = [];
   const store = {
-    start: async () => started ?? ({ status: 'active', question: q1, progress: { completed: 0, total: 1 } }),
+    start: async (_id, _c, options) => { starts.push(options); return started ?? ({ status: 'active', question: q1, progress: { completed: 0, total: 1 } }); },
     read: async () => session, public: s => s,
     answer: async (_id, text, _c, options) => { sent.push({ text, ...options }); const result = results.shift(); if (result instanceof Error) throw result; return result; },
   };
   const ask = async prompt => { prompts.push(prompt); if (!answers.length) throw new Error(`Unexpected prompt: ${prompt}`); return answers.shift(); };
   const run = () => runTerminalCheck({ store, session, config: DEFAULT_CONFIG, ask, terminal: createTerminal({ stream, env: { NO_COLOR: '1' }, width }), stream, waitingGit, more, env: { SPHINX_HOME: '/nonexistent-sphinx-home' }, validate: async () => {}, choose: async () => 'pause', skip: async reason => skips.push(reason) });
-  return { run, sent, skips, prompts, output: () => output, q1 };
+  return { run, sent, skips, prompts, starts, output: () => output, q1 };
 }
 
 test('the terminal check shows the change, asks, grades, and passes', async () => {
@@ -83,7 +83,7 @@ test('after a waiting pass, continue lets Git through and stop keeps the receipt
   const done = { status: 'passed', question: null, progress: { completed: 1, total: 1 }, verdict: 'correct', feedback: '' };
   const continued = harness({ answers: ['It charges twice', 'continue'], results: [done], waitingGit: true });
   assert.equal(await continued.run(), 0);
-  assert.match(continued.output(), /Continue the push\?\n {2}continue: the push goes through\. stop: it does not go through\. Your pass is\n {2}saved, so the same change pushed again goes through without questions\.\n/);
+  assert.match(continued.output(), /Continue the push\?\n {2}continue: the push goes through\. stop: it does not go through\. Your pass is\n {2}saved, so the next push of this change asks only whether to continue\.\n/);
   assert.match(continued.output(), /Approval saved\. Git is continuing\./);
   const halted = harness({ answers: ['It charges twice', 'stop'], results: [{ ...done }], waitingGit: true });
   assert.equal(await halted.run(), 4);
@@ -102,7 +102,7 @@ test('a pass that needed no questions asks before a waiting Git operation contin
   const halted = harness({ answers: ['/stop'], results: [], waitingGit: true, started: none, event: 'pre-commit' });
   assert.equal(await halted.run(), 4, 'the /stop command also answers stop here');
   assert.match(halted.output(), /Continue the commit\?\n {2}continue: the commit goes through\./);
-  assert.match(halted.output(), /the same change committed again goes through without questions/);
+  assert.match(halted.output(), /Your pass is\s+saved, so the next commit of this change asks only whether to continue\./);
   assert.match(halted.output(), /‖ Commit stopped\. It did not go through; your pass is saved\./);
   const manual = harness({ answers: [], results: [], started: none });
   assert.equal(await manual.run(), 0);
@@ -145,6 +145,44 @@ test('while Git waits, command hints name /stop, and on a narrow terminal the ma
   const stopped = harness({ answers: ['/stop'], results: [], waitingGit: true, width: 40 });
   assert.equal(await stopped.run(), 1);
   assert.match(stopped.output(), /\n {2}‖ Push stopped\. It did not go through;\n {4}your progress is saved\.\n {4}Run git push again to continue;\n {4}Sphinx reopens at this question\.\n$/);
+});
+
+test('a held pass asks only whether to continue, saying it passed earlier, with nothing to answer', async () => {
+  const held = { status: 'passed', held: true, progress: { completed: 1, total: 1 } };
+  const stopped = harness({ answers: ['stop'], results: [], waitingGit: true, started: held, held: true });
+  assert.equal(await stopped.run(), 4, 'stop reaches Git as a stopped check, which holds the pass again');
+  const out = stopped.output();
+  assert.match(out, /Loading your earlier pass…\n\n {2}✓ You passed this change earlier, but that push did not go through\.\n\n {2}Continue the push\?\n {2}continue: the push goes through\. stop: it does not go through\. Your pass is\n {2}saved, so the next push of this change asks only whether to continue\.\n/);
+  assert.match(out, /‖ Push stopped\. It did not go through; your pass is saved\./);
+  assert.doesNotMatch(out, /Understanding check complete|Question 1|Open-book|Loading prepared questions/);
+  assert.deepEqual(stopped.prompts, ['  › continue / stop: ']);
+  assert.deepEqual(stopped.sent, [], 'nothing is graded');
+  const continued = harness({ answers: ['continue'], results: [], waitingGit: true, started: held, held: true, event: 'pre-commit', width: 40 });
+  assert.equal(await continued.run(), 0);
+  assert.match(continued.output(), /\n {2}✓ You passed this change earlier, but\n {4}that commit did not go through\.\n\n {2}Continue the commit\?\n/);
+  assert.match(continued.output(), /Approval saved\. Git is continuing\./);
+  const earlier = harness({ answers: [], results: [], waitingGit: true, more: true, started: held, held: true });
+  assert.equal(await earlier.run(), 0);
+  assert.deepEqual(earlier.prompts, [], 'an earlier destination of the push does not ask yet');
+  assert.match(earlier.output(), /✓ You passed this change earlier, but that push did not go through\.\n {2}Approval saved\. This push has another destination to check next\./);
+  const none = harness({ answers: ['stop'], results: [], waitingGit: true, started: { ...held, noQuestionReason: 'Only renames a local variable.' }, held: true });
+  assert.equal(await none.run(), 4);
+  assert.match(none.output(), /✓ This change needed no questions earlier, but that push did not go through\.\n/, 'nobody was asked anything to pass');
+});
+
+test('while Git waits a pass is saved held as it is made, and only a pass held when the check opened is called earlier', async () => {
+  const done = { status: 'passed', held: true, question: null, progress: { completed: 1, total: 1 }, verdict: 'correct', feedback: '' };
+  const waiting = harness({ answers: ['It charges twice', 'continue'], results: [done], waitingGit: true });
+  assert.equal(await waiting.run(), 0);
+  assert.equal(waiting.starts[0].hold, true); assert.equal(waiting.sent[0].hold, true);
+  assert.match(waiting.output(), /✓ Understanding check complete\./); assert.doesNotMatch(waiting.output(), /earlier/);
+  const none = harness({ answers: ['stop'], results: [], waitingGit: true, started: { status: 'passed', held: true, noQuestionReason: 'Only renames a local variable.', progress: { completed: 0, total: 0 } } });
+  assert.equal(await none.run(), 4);
+  assert.match(none.output(), /✓ No questions needed: Only renames a local variable\./); assert.doesNotMatch(none.output(), /earlier/);
+  // A check with no Git operation waiting saves a plain receipt, as before.
+  const manual = harness({ answers: ['It charges twice'], results: [{ ...done, held: undefined }] });
+  assert.equal(await manual.run(), 0);
+  assert.equal(manual.starts[0].hold, false); assert.equal(manual.sent[0].hold, false);
 });
 
 test('Git asks inline on its own terminal, else opens a window', async () => {

@@ -41,6 +41,9 @@ export async function runGitCheckpointTerminal({ request, env = process.env, sig
       controller.signal.throwIfAborted();
       const status = await waitForResult({ id: request.id, env, timeoutMs: Math.max(1, deadline - Date.now()), signal: controller.signal });
       controller.signal.throwIfAborted();
+      // A window opened for another Git attempt never asked this one whether to
+      // continue. Once it passes, this one's own window asks (see launch).
+      if (started.status === 'already-open' && status === 'passed' && request.delivery === 'hook' && !request.more) return await operation();
       return result(['passed', 'skipped', 'stopped', 'pending', 'unavailable', 'interrupted'].includes(status) ? status : 'interrupted');
     } catch { return stopped ? result('pending', stopped) : result('interrupted'); }
   };

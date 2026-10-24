@@ -24,7 +24,9 @@ const cancelled = () => Object.assign(new Error('Check paused. Progress is saved
 const equal = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const offLimits = env => env.SPHINX_EVALUATOR === '1' || (env.CI && !['false', '0'].includes(env.CI));
 // A waiting Git operation in the page's words, as its scope line names it.
-const words = event => event === 'pre-commit' ? ['commit', 'Commit', 'committed'] : ['push', 'Push', 'pushed'];
+const words = event => event === 'pre-commit' ? ['commit', 'Commit'] : ['push', 'Push'];
+// What a pass that did not go through still does: the Git gate holds it until Continue.
+const keptPass = op => `Your pass is saved, so the next ${op} of this change asks only whether to continue.`;
 
 /**
  * A quiet macOS notification that questions are waiting, since the page opens
@@ -70,7 +72,9 @@ function publicFields(state) {
     route: state.route && { provider: state.route.provider, model: state.route.model, tier: state.route.tier },
     progress: state.progress, usage: state.usage, tokens: state.tokens,
     ...(state.question ? { question: { id: state.question.id, prompt: state.question.prompt, choices: state.question.choices || [] } } : {}),
-    ...(state.feedback ? { feedback: state.feedback } : {}),
+    // A pass held from an earlier operation shows no question, so its last grade's feedback would read
+    // out of context. A pass made on this page is held too, but its transcript already shows that feedback.
+    ...(state.feedback && !state.held ? { feedback: state.feedback } : {}),
   };
 }
 
@@ -90,9 +94,9 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
   // Cut short at the consent step (only Git or the deadline can), the pass is already saved.
   let resumeCommand = null;
   const pauseMessage = () => {
-    const [op, Op, done] = words(state.event);
+    const [op, Op] = words(state.event);
     if (!waitingGit) return 'Paused. Your progress is saved. To continue, run the command below; Sphinx reopens at this question.';
-    return state.phase === 'consent' ? `Git stopped waiting before you chose, so the ${op} did not go through. Your pass is saved, so the same change ${done} again goes through without questions.` : `${Op} stopped. It did not go through, and your progress is saved. To continue, run the same ${op} again; Sphinx reopens at this question.`;
+    return state.phase === 'consent' ? `Git stopped waiting before you chose, so the ${op} did not go through. ${keptPass(op)}` : `${Op} stopped. It did not go through, and your progress is saved. To continue, run the same ${op} again; Sphinx reopens at this question.`;
   };
   let state = { phase: 'waiting', operationClosed: false, revision: randomUUID(), sequence, message: 'Waiting for the checkpoint.', messages: [] };
   // The chat transcript for the current checkpoint lives only in this process.
@@ -284,7 +288,7 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
     if (!opened) {
       opened = true;
       const automatic = await Promise.resolve().then(() => openBrowser(url, { env: operationEnv })).catch(() => false);
-      output(automatic ? 'Sphinx: questionnaire opened in a background browser tab. Your coding window stays in place.' : 'Sphinx: open the local URL above to answer. No application was brought to the foreground.');
+      output(automatic ? 'Sphinx: questionnaire opened in a background browser tab. Your coding window stays in place.' : 'Sphinx: open the local URL above. No application was brought to the foreground.');
     }
   }
   function startView(request, snapshot, config, operationEnv, store) {
@@ -414,7 +418,8 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
             reviewAttempt = attempt;
             try {
               publish({ ...publicFields(store.public(await store.read(request.id))), repoRoot: request.repoRoot, phase: 'working', message: 'Reviewing the change…' });
-              return await store.start(request.id, config, { signal: attempt.signal, onProgress: text => {
+              // A pass made while Git waits is saved held: only the Git gate releases it, after Continue.
+              return await store.start(request.id, config, { signal: attempt.signal, hold: waitingGit, onProgress: text => {
                 say({ role: 'sphinx', kind: 'activity', text }); publish(state);
                 // Refresh tokens and cost from the per-call save without blocking review.
                 store.read(request.id).then(saved => { if (active === controller && state.id === request.id) { const fresh = store.public(saved); publish({ ...state, usage: fresh.usage, tokens: fresh.tokens }); } }, () => {});
@@ -479,7 +484,7 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
           const dropDraft = () => { transcript = transcript.filter(item => item.id !== draft && item.id !== step); };
           grading = true; publish(state, { display: true });
           visible = await withTextStream(onText, () => store.answer(request.id, action.action === 'learn' ? 'I do not know. Explain this concept and give me a different scenario to apply it to.' : action.response.trim(), config, {
-            learn: action.action === 'learn', dispute: action.action === 'dispute', expectedQuestionId: action.questionId, signal: localSignal,
+            learn: action.action === 'learn', dispute: action.action === 'dispute', expectedQuestionId: action.questionId, signal: localSignal, hold: waitingGit,
           })).finally(() => { dropDraft(); grading = false; });
           settle('graded');
           await refreshScore(request.repoRoot, operationEnv).catch(() => {});
@@ -507,19 +512,22 @@ export function createBrowserInterview({ env = process.env, signal, timeoutMs = 
         }
       }
       localSignal.throwIfAborted(); await validate(session.snapshot, config);
-      const [op, Op, done] = words(session.snapshot.event), result = visible.noQuestionReason ? `No questions needed: ${visible.noQuestionReason}` : 'You passed.';
+      const [op, Op] = words(session.snapshot.event), result = visible.noQuestionReason ? `No questions needed: ${visible.noQuestionReason}` : 'You passed.';
+      // Held when this page opened, the pass was made for an earlier push or commit that did not
+      // go through; nothing else is asked. (A pass made here is held too, until Git sees Continue.)
+      const earlier = session.status === 'passed' && session.held && `${visible.noQuestionReason ? 'This change needed no questions' : 'You passed this change'} earlier, but that ${op} did not go through.`;
       const note = visible.noQuestionReason ? '' : '\nThis records your answers, not a review of every changed line.';
       // A push to several destinations asks once, after the last one passes.
       if (waitingGit && !request.more) {
-        // A pass that needed no questions can arrive before anyone looked at the page.
+        // A pass that needed no questions, or a held one, can arrive before anyone looked at the page.
         if (!notified) notify({ title: `Sphinx: continue the ${op}?`, message: where, env: operationEnv });
-        const consent = await waitForAction({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'consent', message: `${result} Continue the ${op}?`, choices: [
+        const consent = await waitForAction({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'consent', message: `${earlier || result} Continue the ${op}?`, choices: [
           { value: 'proceed', label: `Continue ${op}`, description: `Continue: the ${op} goes through.` },
-          { value: 'stop', label: `Stop ${op}`, description: `Stop: it does not go through. Your pass is saved, so the same change ${done} again goes through without questions.` },
+          { value: 'stop', label: `Stop ${op}`, description: `Stop: it does not go through. ${keptPass(op)}` },
         ] }, ['proceed', 'stop']);
         if (consent.action === 'stop') {
           finalStatus = 'pending';
-          publish({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'stopped', message: `${Op} stopped. It did not go through. Your pass is saved, so the same change ${done} again goes through without questions. You can close this tab.`, ...(resumeCommand ? { resume: resumeCommand } : {}) });
+          publish({ ...publicFields(visible), repoRoot: request.repoRoot, phase: 'stopped', message: `${Op} stopped. It did not go through. ${keptPass(op)} You can close this tab.`, ...(resumeCommand ? { resume: resumeCommand } : {}) });
           return { status: 'stopped', id: request.id };
         }
       }
